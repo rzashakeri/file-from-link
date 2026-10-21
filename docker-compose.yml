@@ -19,12 +19,15 @@ services:
     volumes: [shared-data:/data]
     depends_on: [redis, api]
     restart: unless-stopped
+  pot-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:latest
+    restart: unless-stopped
   worker:
     build: .
     command: ["python","-m","app.worker"]
     env_file: .env
     volumes: [shared-data:/data]
-    depends_on: [redis]
+    depends_on: [redis, pot-provider]
     restart: unless-stopped
     deploy:
       replicas: 2
