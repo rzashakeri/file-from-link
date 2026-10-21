@@ -1,8 +1,8 @@
 """Mode A (default): the bot runs ON EC2 via long-polling. No Serverless needed.
 Language flow: a new user first picks a language with inline glass buttons
-(English / فارسی); the choice is stored and EVERY message after that —
-welcome, quality picker, queue position, progress, delivery — uses it.
-Change it anytime with /language."""
+(English / فارسی / Русский / العربية); the choice is stored and EVERY message
+after that — welcome, quality picker, queue position, progress, delivery —
+uses it. Change it anytime with /language."""
 import asyncio, io, logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters, TypeHandler, ApplicationHandlerStop
@@ -45,8 +45,10 @@ async def _send_profile_pic(u, username, lang):
         await msg.edit_text(t(lang, "pic_failed"))
 
 def lang_markup():
-    return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=f"lang:{code}")]
-                                 for code, label in LANGUAGES.items()])
+    items = list(LANGUAGES.items())
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(label, callback_data=f"lang:{code}") for code, label in items[i:i + 2]]
+         for i in range(0, len(items), 2)])
 def quality_markup(lang):
     return InlineKeyboardMarkup([[InlineKeyboardButton(fmt_label(lang, k), callback_data=f"dl:{k}")]
                                  for k in FORMAT_ORDER])
@@ -78,7 +80,7 @@ async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await u.message.reply_text(t("en", "choose_language"), reply_markup=lang_markup())
     else:
         await u.message.reply_text(t(lang, "welcome"),
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🌐 Language / زبان", callback_data="langmenu")]]))
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "language_button"), callback_data="langmenu")]]))
 BC_STATE: dict[int, dict] = {}
 def _admin_markup(lang):
     return InlineKeyboardMarkup([
@@ -155,10 +157,12 @@ async def stats_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
     storage = f"{total/1073741824:.1f} GB" if total >= 1073741824 else f"{total//1048576} MB"
     await u.message.reply_text(t(lang_of(u) or "fa", "stats", storage=storage, **s))
 async def language_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text(t("en", "choose_language"), reply_markup=lang_markup())
+    lang = lang_of(u) or "en"
+    await u.message.reply_text(t(lang, "choose_language"), reply_markup=lang_markup())
 async def on_lang_menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
-    await q.edit_message_text(t("en", "choose_language"), reply_markup=lang_markup())
+    lang = lang_of(u) or "en"
+    await q.edit_message_text(t(lang, "choose_language"), reply_markup=lang_markup())
 async def on_lang_pick(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     lang = q.data.split(":", 1)[1]
