@@ -16,7 +16,7 @@ def send_text(chat_id, text, **kw): return tg("sendMessage", chat_id=chat_id, te
 def edit_text(chat_id, message_id, text):
     try: return tg("editMessageText", chat_id=chat_id, message_id=message_id, text=text)
     except Exception: return None
-def deliver(chat_id, path: Path, title: str, lang: str = 'en') -> str:
+def deliver(chat_id, path: Path, title: str, lang: str = 'en', direct_url: str | None = None) -> str:
     size = path.stat().st_size
     if size <= TELEGRAM_LIMIT:
         method = "sendVideo" if path.suffix.lower() in {".mp4",".mkv",".webm",".mov"} else "sendDocument"
@@ -30,10 +30,14 @@ def deliver(chat_id, path: Path, title: str, lang: str = 'en') -> str:
         boto3.client("s3", region_name=AWS_REGION).upload_file(str(path), S3_BUCKET, key)
         url = boto3.client("s3", region_name=AWS_REGION).generate_presigned_url(
             "get_object", Params={"Bucket":S3_BUCKET,"Key":key}, ExpiresIn=FILE_TTL_HOURS*3600)
-        send_text(chat_id, tr(lang, "too_big", title=title, mb=size//1048576, hours=FILE_TTL_HOURS, url=url))
+        msg = tr(lang, "too_big", title=title, mb=size//1048576, hours=FILE_TTL_HOURS, url=url)
+        if direct_url: msg += "\n" + tr(lang, "direct_link", url=direct_url)
+        send_text(chat_id, msg)
         return "s3-link"
     token = secrets.token_hex(8); dest = PUBLIC_DIR/token; dest.mkdir(parents=True, exist_ok=True)
     shutil.copy2(path, dest/path.name)
     url = f"{PUBLIC_BASE_URL}/files/{token}/{path.name}" if PUBLIC_BASE_URL else f"/files/{token}/{path.name}"
-    send_text(chat_id, tr(lang, "too_big", title=title, mb=size//1048576, hours=FILE_TTL_HOURS, url=url))
+    msg = tr(lang, "too_big", title=title, mb=size//1048576, hours=FILE_TTL_HOURS, url=url)
+    if direct_url: msg += "\n" + tr(lang, "direct_link", url=direct_url)
+    send_text(chat_id, msg)
     return "link"
