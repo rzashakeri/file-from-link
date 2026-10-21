@@ -9,12 +9,12 @@ Mitigations built in, tried in order:
 """
 from pathlib import Path
 import yt_dlp
-from .config import DOWNLOAD_DIR, COOKIES_FILE, JOB_TIMEOUT, POT_BASE_URL, PROXY
-from .utils import format_selector
+from .config import DOWNLOAD_DIR, COOKIES_FILE, IG_COOKIES_FILE, JOB_TIMEOUT, POT_BASE_URL, PROXY
+from .utils import format_selector, is_spotify, is_apple_music
 class DownloadError(Exception): pass
 BOT_WALL_MARKERS = ("not a bot", "sign in to confirm", "po token", "potoken", "needs to be reloaded", "requested format is not available")
 FALLBACK_CLIENTS = ["tv", "ios", "web_safari"]
-def _build_opts(choice, job_id, on_progress, player_client=None):
+def _build_opts(choice, job_id, on_progress, player_client=None, url: str = ''):
     out = str(DOWNLOAD_DIR / job_id / "%(title).80s.%(ext)s")
     def hook(d):
         if on_progress and d.get("status") == "downloading":
@@ -30,14 +30,16 @@ def _build_opts(choice, job_id, on_progress, player_client=None):
         opts["proxy"] = PROXY
     if player_client:
         opts["extractor_args"]["youtube"] = {"player_client": [player_client]}
-    if COOKIES_FILE and Path(COOKIES_FILE).exists():
+    if "instagram.com" in url and IG_COOKIES_FILE and Path(IG_COOKIES_FILE).exists():
+        opts["cookiefile"] = IG_COOKIES_FILE
+    elif COOKIES_FILE and Path(COOKIES_FILE).exists():
         opts["cookiefile"] = COOKIES_FILE
     if choice in ("audio", "audiolow"):
         q = "192" if choice == "audio" else "48"
         opts["postprocessors"] = [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": q}]
     return opts
 def _extract_once(url, choice, job_id, on_progress, player_client=None):
-    opts = _build_opts(choice, job_id, on_progress, player_client)
+    opts = _build_opts(choice, job_id, on_progress, player_client, url)
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
         path = Path(ydl.prepare_filename(info))
@@ -68,7 +70,7 @@ def get_direct_url(url: str, choice: str) -> str | None:
     attempts = [None] + FALLBACK_CLIENTS if "youtu" in url else [None]
     for client in attempts:
         try:
-            opts = _build_opts(choice, "urlprobe", None, client)
+            opts = _build_opts(choice, "urlprobe", None, client, url)
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
             if info.get("url"): return info["url"]
@@ -93,7 +95,7 @@ def list_qualities(url: str) -> list[dict]:
     last_err: Exception | None = None
     for client in [None] + FALLBACK_CLIENTS:
         try:
-            opts = _build_opts("best", "probe", None, client)
+            opts = _build_opts("best", "probe", None, client, url)
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
         except Exception as e:
@@ -111,3 +113,43 @@ def list_qualities(url: str) -> list[dict]:
     if not heights and last_err: raise last_err
     return [{"height": h, "mb": (heights[h] / 1048576) if heights[h] else None}
             for h in sorted(heights, reverse=True)]
+
+def _spotify_query(url: str) -> str:
+    import httpx
+    r = httpx.get("https://open.spotify.com/oembed", params={"url": url}, timeout=20, follow_redirects=True)
+    r.raise_for_status(); d = r.json()
+    return f"{d.get('title','')} {d.get('author_name','')}".strip()
+def _apple_query(url: str) -> str:
+    import httpx, json as _json, re as _re
+    html = httpx.get(url, timeout=20, follow_redirects=True,
+                     headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}).text
+    for m in _re.finditer(r'<script type="application/ld\+json">(.*?)</script>', html, _re.S):
+        try: data = _json.loads(m.group(1))
+        except Exception: continue
+        items = data if isinstance(data, list) else [data]
+        for it in items:
+            if isinstance(it, dict) and it.get("@type") in ("MusicRecording", "MusicAlbum"):
+                name = it.get("name", "")
+                artist = ((it.get("byArtist") or {}).get("name") if isinstance(it.get("byArtist"), dict) else "") or ""
+                if name: return f"{name} {artist}".strip()
+    m = _re.search(r"<title>(.*?)</title>", html, _re.S)
+    if m:
+        title = m.group(1).replace(" – Apple Music", "").replace(" - Apple Music", "").strip()
+        title = _re.sub(r"\s+", " ", title)
+        if title: return title
+    return ""
+def resolve_stream_match(url: str) -> str:
+    """Spotify / Apple Music links are DRM-locked — no direct download exists.
+    Standard bot approach: identify the track, download the same track from YouTube."""
+    try:
+        q = _spotify_query(url) if is_spotify(url) else _apple_query(url)
+    except Exception:
+        q = ""
+    if not q: raise DownloadError("could not read the track info from that link")
+    opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(f"ytsearch1:{q} audio", download=False)
+    entries = info.get("entries") or []
+    if not entries: raise DownloadError("no matching track found on YouTube")
+    e = entries[0]
+    return e.get("webpage_url") or f"https://www.youtube.com/watch?v={e['id']}"
