@@ -16,6 +16,7 @@ AWS_REGION = os.environ.get("AWS_REGION","eu-central-1")
 COOKIES_FILE = os.environ.get("YTDLP_COOKIES_FILE","")
 IG_COOKIES_FILE = os.environ.get("IG_COOKIES_FILE","")
 MAX_FILE_BYTES = int(os.environ.get("MAX_FILE_BYTES", str(1024*1024*1024)))  # 1 GiB cap (Reza, 2026-10-21)
+OWNER_ID = int(os.environ.get("OWNER_ID", "0"))  # only this Telegram user may use /stats
 POT_BASE_URL = os.environ.get("POT_BASE_URL", "http://pot-provider:4416")
 PROXY = os.environ.get("YTDLP_PROXY", "")
 for d in (DOWNLOAD_DIR, PUBLIC_DIR): d.mkdir(parents=True, exist_ok=True)
