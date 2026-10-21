@@ -1,0 +1,11 @@
+.env
+*.db
+__pycache__/
+.venv/
+data/
+downloads/
+cookies.txt
+serverless/tgcloud/lib/config.js
+.tgcloud/
+node_modules/
+*.log
