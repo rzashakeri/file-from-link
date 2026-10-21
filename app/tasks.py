@@ -1,9 +1,9 @@
 import shutil
 from pathlib import Path
 from . import db
-from .downloader import download, DownloadError
+from .downloader import download, DownloadError, get_direct_url
 from .sender import deliver, send_text, edit_text
-from .config import DOWNLOAD_DIR
+from .config import DOWNLOAD_DIR, TELEGRAM_LIMIT
 from .i18n import t as tr
 from .cleanup import sweep_public
 def process_job(job_id: str, status_message_id: int | None = None):
@@ -23,7 +23,11 @@ def process_job(job_id: str, status_message_id: int | None = None):
         path, meta = download(job["url"], fmt, job_id, prog)
         db.update_job(job_id, status="uploading", title=meta.get("title",""), filepath=str(path), filesize=path.stat().st_size)
         if status_message_id: edit_text(chat_id, status_message_id, tr(lang, "uploading"))
-        deliver(chat_id, path, meta.get("title",""), lang)
+        direct = None
+        if path.stat().st_size > TELEGRAM_LIMIT:
+            try: direct = get_direct_url(job["url"], fmt)
+            except Exception: direct = None
+        deliver(chat_id, path, meta.get("title",""), lang, direct)
         db.update_job(job_id, status="done")
         if status_message_id: edit_text(chat_id, status_message_id, tr(lang, "done", title=meta.get("title","")))
     except DownloadError as e:
