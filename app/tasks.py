@@ -5,7 +5,9 @@ from .downloader import download, DownloadError
 from .sender import deliver, send_text, edit_text
 from .config import DOWNLOAD_DIR
 from .i18n import t as tr
+from .cleanup import sweep_public
 def process_job(job_id: str, status_message_id: int | None = None):
+    sweep_public()
     job = db.get_job(job_id)
     if not job: return
     chat_id, fmt = job["chat_id"], job["fmt"]; lang = job.get("lang") or "en"
