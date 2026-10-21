@@ -9,6 +9,15 @@ from . import db
 from .config import API_SECRET, PUBLIC_DIR
 from .queue import enqueue, QueueFull
 app = FastAPI(title="ytdlp-downloader-api")
+@app.on_event("startup")
+async def _cleanup_loop():
+    import asyncio
+    from .cleanup import sweep_public
+    async def run():
+        while True:
+            sweep_public()
+            await asyncio.sleep(3600)
+    asyncio.create_task(run())
 class JobIn(BaseModel):
     chat_id: int; user_id: int; url: str; fmt: str = "best"; status_message_id: int | None = None; lang: str = "en"
 def auth(secret: str | None):
