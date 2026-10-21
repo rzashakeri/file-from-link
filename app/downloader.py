@@ -32,8 +32,9 @@ def _build_opts(choice, job_id, on_progress, player_client=None):
         opts["extractor_args"]["youtube"] = {"player_client": [player_client]}
     if COOKIES_FILE and Path(COOKIES_FILE).exists():
         opts["cookiefile"] = COOKIES_FILE
-    if choice == "audio":
-        opts["postprocessors"] = [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}]
+    if choice in ("audio", "audiolow"):
+        q = "192" if choice == "audio" else "48"
+        opts["postprocessors"] = [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": q}]
     return opts
 def _extract_once(url, choice, job_id, on_progress, player_client=None):
     opts = _build_opts(choice, job_id, on_progress, player_client)
@@ -78,3 +79,35 @@ def get_direct_url(url: str, choice: str) -> str | None:
             if client is not attempts[-1] and any(m in str(e).lower() for m in BOT_WALL_MARKERS): continue
             return None
     return None
+
+def _est_size(f: dict, duration: float) -> float:
+    if f.get("filesize"): return float(f["filesize"])
+    if f.get("filesize_approx"): return float(f["filesize_approx"])
+    if f.get("tbr") and duration: return float(f["tbr"]) * 1000 / 8 * duration
+    return 0.0
+
+def list_qualities(url: str) -> list[dict]:
+    """Real downloadable resolutions for THIS video (union across the player
+    clients that answer), each with an approximate total size in MB."""
+    heights: dict[int, float] = {}
+    last_err: Exception | None = None
+    for client in [None] + FALLBACK_CLIENTS:
+        try:
+            opts = _build_opts("best", "probe", None, client)
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as e:
+            last_err = e; continue
+        fmts = info.get("formats") or []
+        dur = float(info.get("duration") or 0)
+        aud = max((_est_size(f, dur) for f in fmts
+                   if f.get("acodec") not in (None, "none") and f.get("vcodec") in (None, "none")), default=0.0)
+        for f in fmts:
+            h = f.get("height")
+            if not h or f.get("vcodec") in (None, "none", "images"): continue
+            if str(f.get("format_id", "")).startswith("sb"): continue
+            total = _est_size(f, dur) + (aud if f.get("acodec") in (None, "none") else 0.0)
+            if total > heights.get(h, 0): heights[h] = total
+    if not heights and last_err: raise last_err
+    return [{"height": h, "mb": (heights[h] / 1048576) if heights[h] else None}
+            for h in sorted(heights, reverse=True)]
