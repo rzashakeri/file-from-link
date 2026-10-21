@@ -9,7 +9,7 @@ Mitigations built in, tried in order:
 """
 from pathlib import Path
 import yt_dlp
-from .config import DOWNLOAD_DIR, COOKIES_FILE, JOB_TIMEOUT, POT_BASE_URL
+from .config import DOWNLOAD_DIR, COOKIES_FILE, JOB_TIMEOUT, POT_BASE_URL, PROXY
 from .utils import format_selector
 class DownloadError(Exception): pass
 BOT_WALL_MARKERS = ("not a bot", "sign in to confirm", "po token", "potoken")
@@ -26,6 +26,8 @@ def _build_opts(choice, job_id, on_progress, player_client=None):
         "merge_output_format": "mp4", "quiet": True, "no_warnings": True,
         "extractor_args": {"youtubepot-bgutilhttp": {"base_url": [POT_BASE_URL]}},
     }
+    if PROXY:
+        opts["proxy"] = PROXY
     if player_client:
         opts["extractor_args"]["youtube"] = {"player_client": [player_client]}
     if COOKIES_FILE and Path(COOKIES_FILE).exists():
