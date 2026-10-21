@@ -38,6 +38,25 @@ def _build_opts(choice, job_id, on_progress, player_client=None, url: str = ''):
         q = "192" if choice == "audio" else "48"
         opts["postprocessors"] = [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": q}]
     return opts
+def _aparat_resolve(url: str):
+    """yt-dlp's Aparat extractor is broken against Aparat's current pages
+    ('Unable to extract og:title' from the embed page). The WATCH page still
+    carries og:title and direct .mp4 sources — resolve those ourselves and
+    hand yt-dlp the direct file URL."""
+    import httpx, re as _re
+    html = httpx.get(url, timeout=25, follow_redirects=True,
+                     headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}).text
+    m = _re.search(r'property="og:title" content="([^"]+)"', html)
+    title = m.group(1) if m else None
+    cands = {}
+    for u in _re.findall(r'https://[^"\'\\ ]+?\.mp4[^"\'\\ ]*', html):
+        u = u.replace("&amp;", "&")
+        q = _re.search(r'(\d{3,4})p', u)
+        key = int(q.group(1)) if q else 0
+        if key >= cands.get("q", -1):
+            cands = {"q": key, "url": u}
+    if not cands.get("url"): return None
+    return cands["url"], title
 def _extract_once(url, choice, job_id, on_progress, player_client=None):
     opts = _build_opts(choice, job_id, on_progress, player_client, url)
     with yt_dlp.YoutubeDL(opts) as ydl:
