@@ -1,0 +1,6 @@
+# Automatic HTTPS for the API + big-file links. Point dl.example.com DNS (A record)
+# to the EC2 public IP, open ports 80/443 in the Security Group, then run Caddy
+# (or fold this into nginx). The bot/worker never need a public port.
+dl.example.com {
+    reverse_proxy 127.0.0.1:8000
+}
