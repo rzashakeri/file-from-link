@@ -3,7 +3,7 @@ Language flow: a new user first picks a language with inline glass buttons
 (English / فارسی); the choice is stored and EVERY message after that —
 welcome, quality picker, queue position, progress, delivery — uses it.
 Change it anytime with /language."""
-import logging
+import asyncio, logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 from .config import BOT_TOKEN
@@ -11,6 +11,7 @@ from .utils import extract_urls, FORMAT_ORDER
 from .queue import enqueue, QueueFull
 from . import db
 from .i18n import LANGUAGES, t, fmt_label
+from .downloader import list_qualities
 logging.basicConfig(level=logging.INFO)
 PENDING: dict[int, str] = {}
 def _is_youtube(url: str) -> bool:
@@ -30,6 +31,21 @@ def lang_markup():
 def quality_markup(lang):
     return InlineKeyboardMarkup([[InlineKeyboardButton(fmt_label(lang, k), callback_data=f"dl:{k}")]
                                  for k in FORMAT_ORDER])
+def dynamic_markup(lang, qualities):
+    rows = []
+    for q in qualities[:8]:
+        label = f"📹 {q['height']}p" + (f" · ~{q['mb']:.0f} MB" if q.get("mb") else "")
+        rows.append([InlineKeyboardButton(label, callback_data=f"dl:h{q['height']}")])
+    rows.append([InlineKeyboardButton(fmt_label(lang, "audio"), callback_data="dl:audio")])
+    rows.append([InlineKeyboardButton(fmt_label(lang, "audiolow"), callback_data="dl:audiolow")])
+    return InlineKeyboardMarkup(rows)
+async def probe_markup(lang, url):
+    """Buttons from the video's REAL formats; falls back to the static list."""
+    try:
+        qualities = await asyncio.to_thread(list_qualities, url)
+    except Exception:
+        qualities = []
+    return dynamic_markup(lang, qualities) if qualities else quality_markup(lang)
 def lang_of(u: Update):
     return db.get_lang(u.effective_user.id)
 
@@ -53,7 +69,9 @@ async def on_lang_pick(u: Update, c: ContextTypes.DEFAULT_TYPE):
     url = PENDING.pop(u.effective_chat.id, None)
     if url and _is_youtube(url):
         PENDING[u.effective_chat.id] = url
-        await q.edit_message_text(t(lang, "quality_question", url=url), reply_markup=quality_markup(lang))
+        await q.edit_message_text(t(lang, "probing"))
+        markup = await probe_markup(lang, url)
+        await q.edit_message_text(t(lang, "quality_question", url=url), reply_markup=markup)
     elif url:
         await _enqueue_direct(q, u.effective_chat.id, u.effective_user.id, url, lang)
     else:
@@ -69,7 +87,9 @@ async def on_message(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await u.message.reply_text(t("en", "choose_language"), reply_markup=lang_markup()); return
     if _is_youtube(url):
         PENDING[u.effective_chat.id] = url
-        await u.message.reply_text(t(lang, "quality_question", url=url), reply_markup=quality_markup(lang))
+        msg = await u.message.reply_text(t(lang, "probing"))
+        markup = await probe_markup(lang, url)
+        await msg.edit_text(t(lang, "quality_question", url=url), reply_markup=markup)
     else:
         msg = await u.message.reply_text(t(lang, "direct_start"))
         try:
