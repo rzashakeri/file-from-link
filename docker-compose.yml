@@ -1,0 +1,33 @@
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server","--appendonly","yes"]
+    volumes: [redis-data:/data]
+    restart: unless-stopped
+  api:
+    build: .
+    command: ["uvicorn","app.api:app","--host","0.0.0.0","--port","8000"]
+    env_file: .env
+    volumes: [shared-data:/data]
+    ports: ["8000:8000"]
+    depends_on: [redis]
+    restart: unless-stopped
+  bot:
+    build: .
+    command: ["python","-m","app.bot"]
+    env_file: .env
+    volumes: [shared-data:/data]
+    depends_on: [redis, api]
+    restart: unless-stopped
+  worker:
+    build: .
+    command: ["python","-m","app.worker"]
+    env_file: .env
+    volumes: [shared-data:/data]
+    depends_on: [redis]
+    restart: unless-stopped
+    deploy:
+      replicas: 2
+volumes:
+  redis-data:
+  shared-data:
