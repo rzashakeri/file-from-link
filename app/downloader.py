@@ -9,7 +9,7 @@ Mitigations built in, tried in order:
 """
 from pathlib import Path
 import yt_dlp
-from .config import DOWNLOAD_DIR, COOKIES_FILE, IG_COOKIES_FILE, JOB_TIMEOUT, POT_BASE_URL, PROXY
+from .config import DOWNLOAD_DIR, COOKIES_FILE, IG_COOKIES_FILE, JOB_TIMEOUT, POT_BASE_URL, PROXY, MAX_FILE_BYTES
 from .utils import format_selector, is_spotify, is_apple_music
 class DownloadError(Exception): pass
 BOT_WALL_MARKERS = ("not a bot", "sign in to confirm", "po token", "potoken", "needs to be reloaded", "requested format is not available")
@@ -23,7 +23,7 @@ def _build_opts(choice, job_id, on_progress, player_client=None, url: str = ''):
     opts = {
         "format": format_selector(choice), "outtmpl": out, "noplaylist": True,
         "progress_hooks": [hook], "socket_timeout": 30, "retries": 3,
-        "merge_output_format": "mp4", "quiet": True, "no_warnings": True,
+        "merge_output_format": "mp4", "quiet": True, "no_warnings": True, "max_filesize": MAX_FILE_BYTES,
         "extractor_args": {"youtubepot-bgutilhttp": {"base_url": [POT_BASE_URL]}},
     }
     if PROXY:
