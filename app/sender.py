@@ -1,7 +1,7 @@
 """Deliver a finished file to a Telegram chat.
 <=49MB: direct sendVideo/sendDocument. >49MB: S3 presigned link if configured,
 otherwise a public link served by app.api (/files/<token>/<name>, TTL-bound)."""
-import secrets, shutil, time, urllib.parse
+import json, secrets, shutil, subprocess, time, urllib.parse
 from pathlib import Path
 import httpx
 from .config import BOT_TOKEN, TELEGRAM_LIMIT, PUBLIC_DIR, PUBLIC_BASE_URL, S3_BUCKET, AWS_REGION, FILE_TTL_HOURS
@@ -16,13 +16,32 @@ def send_text(chat_id, text, **kw): return tg("sendMessage", chat_id=chat_id, te
 def edit_text(chat_id, message_id, text):
     try: return tg("editMessageText", chat_id=chat_id, message_id=message_id, text=text)
     except Exception: return None
+def _probe_video(path: Path) -> dict:
+    """Real width/height/duration via ffprobe — without these Telegram
+    guesses the aspect ratio and clips look stretched or boxed."""
+    try:
+        out = subprocess.run(["ffprobe", "-v", "quiet", "-print_format", "json",
+                              "-show_streams", "-show_format", str(path)],
+                             capture_output=True, text=True, timeout=30)
+        data = json.loads(out.stdout)
+        v = next(s for s in data.get("streams", []) if s.get("codec_type") == "video")
+        meta = {}
+        if v.get("width") and v.get("height"): meta.update(width=int(v["width"]), height=int(v["height"]))
+        d = (data.get("format") or {}).get("duration") or v.get("duration")
+        if d: meta["duration"] = int(float(d))
+        return meta
+    except Exception:
+        return {}
 def deliver(chat_id, path: Path, title: str, lang: str = 'en', direct_url: str | None = None) -> str:
     size = path.stat().st_size
     if size <= TELEGRAM_LIMIT:
-        method = "sendVideo" if path.suffix.lower() in {".mp4",".mkv",".webm",".mov"} else "sendDocument"
+        is_video = path.suffix.lower() in {".mp4",".mkv",".webm",".mov"}
+        method = "sendVideo" if is_video else "sendDocument"
         field = "video" if method=="sendVideo" else "document"
+        extra = _probe_video(path) if is_video else {}
+        if extra: extra["supports_streaming"] = True
         with path.open("rb") as f:
-            tg(method, chat_id=chat_id, caption=(title or path.name)[:1000], **{field:(path.name, f)})
+            tg(method, chat_id=chat_id, caption=(title or path.name)[:1000], **extra, **{field:(path.name, f)})
         return "file"
     if S3_BUCKET:
         import boto3
