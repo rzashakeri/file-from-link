@@ -60,3 +60,21 @@ def download(url: str, choice: str, job_id: str, on_progress=None) -> tuple[Path
                 continue  # bot wall -> try the next player client
             raise DownloadError(str(e)[:500]) from e
     raise DownloadError(str(last_error)[:500] if last_error else "download failed")
+
+def get_direct_url(url: str, choice: str) -> str | None:
+    """Best-effort fresh direct stream URL from the source (signed, expiring,
+    often bound to THIS server's IP — a convenience link, not a guarantee)."""
+    attempts = [None] + FALLBACK_CLIENTS if "youtu" in url else [None]
+    for client in attempts:
+        try:
+            opts = _build_opts(choice, "urlprobe", None, client)
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+            if info.get("url"): return info["url"]
+            for f in info.get("requested_formats") or []:
+                if f.get("url") and f.get("vcodec") not in (None, "none"): return f["url"]
+            return None
+        except yt_dlp.utils.DownloadError as e:
+            if client is not attempts[-1] and any(m in str(e).lower() for m in BOT_WALL_MARKERS): continue
+            return None
+    return None
