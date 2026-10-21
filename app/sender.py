@@ -1,7 +1,7 @@
 """Deliver a finished file to a Telegram chat.
 <=49MB: direct sendVideo/sendDocument. >49MB: S3 presigned link if configured,
 otherwise a public link served by app.api (/files/<token>/<name>, TTL-bound)."""
-import secrets, shutil, time
+import secrets, shutil, time, urllib.parse
 from pathlib import Path
 import httpx
 from .config import BOT_TOKEN, TELEGRAM_LIMIT, PUBLIC_DIR, PUBLIC_BASE_URL, S3_BUCKET, AWS_REGION, FILE_TTL_HOURS
@@ -36,7 +36,8 @@ def deliver(chat_id, path: Path, title: str, lang: str = 'en', direct_url: str |
         return "s3-link"
     token = secrets.token_hex(8); dest = PUBLIC_DIR/token; dest.mkdir(parents=True, exist_ok=True)
     shutil.copy2(path, dest/path.name)
-    url = f"{PUBLIC_BASE_URL}/files/{token}/{path.name}" if PUBLIC_BASE_URL else f"/files/{token}/{path.name}"
+    enc = urllib.parse.quote(path.name)
+    url = f"{PUBLIC_BASE_URL}/files/{token}/{enc}" if PUBLIC_BASE_URL else f"/files/{token}/{enc}"
     msg = tr(lang, "too_big", title=title, mb=size//1048576, hours=FILE_TTL_HOURS, url=url)
     if direct_url: msg += "\n" + tr(lang, "direct_link", url=direct_url)
     send_text(chat_id, msg)
