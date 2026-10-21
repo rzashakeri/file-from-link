@@ -1,25 +1,36 @@
-"""Instagram profile-picture fetch (public data, no login).
-Primary: the web_profile_info API (HD url). Fallback: og:image of the profile page."""
-import re
+"""Instagram profile-picture fetch via the web_profile_info API (HD url).
+NOTE: there is deliberately NO og:image fallback — logged out, Instagram
+serves the same generic login-page image for every profile, which made the
+bot send one identical (wrong) photo for all users. Without a login the API
+rate-limits datacenter IPs (429); with IG_COOKIES_FILE set (a burner
+account's session) the same call succeeds — that is also what stories need."""
+import os
+from pathlib import Path
 import httpx
 _UA = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15"}
-def fetch_profile_pic(username: str) -> bytes:
-    pic_url = None
+def _ig_cookie_header() -> dict:
+    path = os.environ.get("IG_COOKIES_FILE", "")
+    if not path or not Path(path).exists(): return {}
+    jar = {}
     try:
-        r = httpx.get("https://i.instagram.com/api/v1/users/web_profile_info/",
-                      params={"username": username},
-                      headers={**_UA, "X-IG-App-ID": "936619743392459"},
-                      timeout=20, follow_redirects=True)
-        if r.status_code == 200:
-            user = (r.json().get("data") or {}).get("user") or {}
-            pic_url = user.get("profile_pic_url_hd") or user.get("profile_pic_url")
-    except Exception:
-        pic_url = None
-    if not pic_url:
-        html = httpx.get(f"https://www.instagram.com/{username}/", headers=_UA,
-                         timeout=20, follow_redirects=True).text
-        m = re.search(r'property="og:image" content="([^"]+)"', html)
-        if m: pic_url = m.group(1).replace("&amp;", "&")
+        for line in Path(path).read_text(encoding="utf-8", errors="ignore").splitlines():
+            parts = line.split("	")
+            if len(parts) >= 7 and "instagram" in parts[0]:
+                jar[parts[5]] = parts[6]
+    except OSError:
+        return {}
+    if "sessionid" not in jar: return {}
+    h = {"Cookie": "; ".join(f"{k}={v}" for k, v in jar.items())}
+    if jar.get("csrftoken"): h["X-CSRFToken"] = jar["csrftoken"]
+    return h
+def fetch_profile_pic(username: str) -> bytes:
+    headers = {**_UA, "X-IG-App-ID": "936619743392459", **_ig_cookie_header()}
+    r = httpx.get("https://i.instagram.com/api/v1/users/web_profile_info/",
+                  params={"username": username}, headers=headers,
+                  timeout=20, follow_redirects=True)
+    if r.status_code != 200: raise RuntimeError(f"instagram api {r.status_code}")
+    user = (r.json().get("data") or {}).get("user") or {}
+    pic_url = user.get("profile_pic_url_hd") or user.get("profile_pic_url")
     if not pic_url: raise RuntimeError("profile picture not found")
     img = httpx.get(pic_url, headers=_UA, timeout=30, follow_redirects=True)
     img.raise_for_status()
