@@ -6,7 +6,7 @@ Change it anytime with /language."""
 import asyncio, io, logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
-from .config import BOT_TOKEN
+from .config import BOT_TOKEN, OWNER_ID, PUBLIC_DIR
 from .utils import extract_urls, FORMAT_ORDER, ig_profile_username, is_ig_story, is_spotify, is_apple_music
 from .queue import enqueue, QueueFull
 from . import db
@@ -72,6 +72,20 @@ async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
     else:
         await u.message.reply_text(t(lang, "welcome"),
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🌐 Language / زبان", callback_data="langmenu")]]))
+async def stats_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    if not OWNER_ID or u.effective_user.id != OWNER_ID:
+        return  # owner-only: silent for everyone else
+    s = db.stats()
+    total = 0
+    try:
+        for r, _dirs, files in __import__("os").walk(PUBLIC_DIR):
+            for f in files:
+                try: total += __import__("os").path.getsize(__import__("os").path.join(r, f))
+                except OSError: pass
+    except Exception:
+        pass
+    storage = f"{total/1073741824:.1f} GB" if total >= 1073741824 else f"{total//1048576} MB"
+    await u.message.reply_text(t(lang_of(u) or "fa", "stats", storage=storage, **s))
 async def language_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
     await u.message.reply_text(t("en", "choose_language"), reply_markup=lang_markup())
 async def on_lang_menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
@@ -141,6 +155,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start)); app.add_handler(CommandHandler("help", start))
     app.add_handler(CommandHandler("language", language_cmd))
+    app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CallbackQueryHandler(on_lang_pick, pattern=r"^lang:"))
     app.add_handler(CallbackQueryHandler(on_lang_menu, pattern=r"^langmenu$"))
     app.add_handler(CallbackQueryHandler(on_pick, pattern=r"^dl:"))
