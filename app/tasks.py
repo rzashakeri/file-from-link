@@ -1,10 +1,11 @@
 import shutil
 from pathlib import Path
 from . import db
-from .downloader import download, DownloadError, get_direct_url
+from .downloader import download, DownloadError, get_direct_url, resolve_stream_match
 from .sender import deliver, send_text, edit_text
 from .config import DOWNLOAD_DIR, TELEGRAM_LIMIT
 from .i18n import t as tr
+from .utils import is_spotify, is_apple_music
 from .cleanup import sweep_public
 def process_job(job_id: str, status_message_id: int | None = None):
     sweep_public()
@@ -20,7 +21,11 @@ def process_job(job_id: str, status_message_id: int | None = None):
                 if pct - last["pct"] >= 10:
                     last["pct"] = pct
                     if status_message_id: edit_text(chat_id, status_message_id, tr(lang, "downloading", pct=pct))
-        path, meta = download(job["url"], fmt, job_id, prog)
+        url = job["url"]
+        if is_spotify(url) or is_apple_music(url):
+            if status_message_id: edit_text(chat_id, status_message_id, tr(lang, "matching"))
+            url = resolve_stream_match(url)
+        path, meta = download(url, fmt, job_id, prog)
         db.update_job(job_id, status="uploading", title=meta.get("title",""), filepath=str(path), filesize=path.stat().st_size)
         if status_message_id: edit_text(chat_id, status_message_id, tr(lang, "uploading"))
         direct = None
