@@ -10,7 +10,7 @@ from .config import API_SECRET, PUBLIC_DIR
 from .queue import enqueue, QueueFull
 app = FastAPI(title="ytdlp-downloader-api")
 class JobIn(BaseModel):
-    chat_id: int; user_id: int; url: str; fmt: str = "best"; status_message_id: int | None = None
+    chat_id: int; user_id: int; url: str; fmt: str = "best"; status_message_id: int | None = None; lang: str = "en"
 def auth(secret: str | None):
     if not secret or not secrets.compare_digest(secret, API_SECRET): raise HTTPException(401, "bad secret")
 @app.get("/health")
@@ -18,7 +18,7 @@ def health(): return {"ok": True}
 @app.post("/jobs")
 def create(job: JobIn, x_api_secret: str | None = Header(None)):
     auth(x_api_secret)
-    try: jid, pos = enqueue(job.chat_id, job.user_id, job.url, job.fmt, job.status_message_id)
+    try: jid, pos = enqueue(job.chat_id, job.user_id, job.url, job.fmt, job.status_message_id, job.lang)
     except QueueFull as e: raise HTTPException(429, str(e))
     return {"job_id": jid, "position": pos, "status": "queued"}
 @app.get("/jobs/{jid}")
