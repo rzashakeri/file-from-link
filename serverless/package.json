@@ -1,0 +1,6 @@
+{
+  "name": "ytdlp-downloader-front",
+  "private": true,
+  "scripts": { "deploy": "tgcloud push", "status": "tgcloud status" },
+  "devDependencies": { "@tgcloud/cli": "^0.2.0" }
+}
