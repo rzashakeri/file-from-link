@@ -12,7 +12,7 @@ import yt_dlp
 from .config import DOWNLOAD_DIR, COOKIES_FILE, JOB_TIMEOUT, POT_BASE_URL, PROXY
 from .utils import format_selector
 class DownloadError(Exception): pass
-BOT_WALL_MARKERS = ("not a bot", "sign in to confirm", "po token", "potoken")
+BOT_WALL_MARKERS = ("not a bot", "sign in to confirm", "po token", "potoken", "needs to be reloaded")
 FALLBACK_CLIENTS = ["tv", "web_safari", "ios"]
 def _build_opts(choice, job_id, on_progress, player_client=None):
     out = str(DOWNLOAD_DIR / job_id / "%(title).80s.%(ext)s")
