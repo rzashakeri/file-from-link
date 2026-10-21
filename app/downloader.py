@@ -146,9 +146,20 @@ def resolve_stream_match(url: str) -> str:
     except Exception:
         q = ""
     if not q: raise DownloadError("could not read the track info from that link")
-    opts = {"quiet": True, "no_warnings": True, "skip_download": True}
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(f"ytsearch1:{q} audio", download=False)
+    info, last_err = None, None
+    for client in [None] + FALLBACK_CLIENTS:
+        opts = {"quiet": True, "no_warnings": True, "skip_download": True,
+                "extractor_args": {"youtubepot-bgutilhttp": {"base_url": [POT_BASE_URL]}}}
+        if PROXY: opts["proxy"] = PROXY
+        if COOKIES_FILE and Path(COOKIES_FILE).exists(): opts["cookiefile"] = COOKIES_FILE
+        if client: opts["extractor_args"]["youtube"] = {"player_client": [client]}
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(f"ytsearch1:{q} audio", download=False)
+            break
+        except Exception as e:
+            last_err = e; continue
+    if info is None: raise DownloadError(str(last_err)[:200] if last_err else "YouTube search failed")
     entries = info.get("entries") or []
     if not entries: raise DownloadError("no matching track found on YouTube")
     e = entries[0]
