@@ -21,6 +21,7 @@ STRINGS = {
     "failed_generic": "❌ Something went wrong while downloading. Please try again.",
     "too_big": "📦 “{title}” is bigger than Telegram's 50MB bot limit ({mb}MB).\nDownload link (valid {hours}h):\n{url}",
     "language_set": "✅ Language set to English. Send me a link whenever you are ready!",
+    "direct_link": "🔗 Direct link from the source (expires in a few hours and may not open from every network):\n{url}",
   },
   "fa": {
     "choose_language": "🌐 Choose your language / زبان خود را انتخاب کنید",
@@ -39,6 +40,7 @@ STRINGS = {
     "failed_generic": "❌ خطای غیرمنتظره هنگام دانلود. دوباره تلاش کن.",
     "too_big": "📦 «{title}» بزرگ‌تر از سقف ۵۰MB تلگرام است ({mb}MB).\nلینک دانلود ({hours} ساعت معتبر):\n{url}",
     "language_set": "✅ زبان فارسی شد. هر وقت آماده‌ای لینک بفرست!",
+    "direct_link": "🔗 لینک مستقیم از خود منبع (چند ساعت بیشتر معتبر نیست و ممکنه از همه شبکه‌ها باز نشه):\n{url}",
   },
 }
 def t(lang: str, key: str, **kw) -> str:
