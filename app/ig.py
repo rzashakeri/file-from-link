@@ -23,4 +23,17 @@ def fetch_profile_pic(username: str) -> bytes:
     if not pic_url: raise RuntimeError("profile picture not found")
     img = httpx.get(pic_url, headers=_UA, timeout=30, follow_redirects=True)
     img.raise_for_status()
-    return img.content
+    return _as_jpeg(img.content)
+def _as_jpeg(data: bytes) -> bytes:
+    """Telegram photos: JPEG/PNG pass through; WebP gets converted via ffmpeg."""
+    if data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n":
+        return data
+    try:
+        import subprocess
+        out = subprocess.run(["ffmpeg", "-v", "error", "-i", "pipe:0", "-frames:v", "1",
+                              "-f", "mjpeg", "pipe:1"], input=data, capture_output=True, timeout=30)
+        if out.returncode == 0 and out.stdout[:3] == b"\xff\xd8\xff":
+            return out.stdout
+    except Exception:
+        pass
+    return data
