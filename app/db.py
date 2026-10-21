@@ -46,3 +46,17 @@ def queue_position(jid):
         r = con.execute("SELECT created FROM jobs WHERE id=?", (jid,)).fetchone()
         if not r: return None
         return con.execute("SELECT COUNT(*) c FROM jobs WHERE status='queued' AND created<=?", (r["created"],)).fetchone()["c"]
+def stats():
+    import time as _t
+    day_start = _t.time() - (_t.time() % 86400)
+    with _c() as con:
+        users = con.execute("SELECT COUNT(DISTINCT user_id) c FROM (SELECT user_id FROM users UNION SELECT user_id FROM jobs)").fetchone()["c"]
+        jobs = con.execute("SELECT COUNT(*) c FROM jobs").fetchone()["c"]
+        done = con.execute("SELECT COUNT(*) c FROM jobs WHERE status='done'").fetchone()["c"]
+        failed = con.execute("SELECT COUNT(*) c FROM jobs WHERE status='failed'").fetchone()["c"]
+        today = con.execute("SELECT COUNT(*) c FROM jobs WHERE created>=?", (day_start,)).fetchone()["c"]
+    return {"users": users, "jobs": jobs, "done": done, "failed": failed, "today": today}
+def first_user_id():
+    with _c() as con:
+        r = con.execute("SELECT user_id FROM jobs ORDER BY created ASC LIMIT 1").fetchone()
+    return r["user_id"] if r else None
