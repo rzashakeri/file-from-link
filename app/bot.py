@@ -6,6 +6,8 @@ Change it anytime with /language."""
 import asyncio, io, logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+from telegram.request import HTTPXRequest
+import time as _time
 from .config import BOT_TOKEN, OWNER_ID, PUBLIC_DIR
 from .utils import extract_urls, FORMAT_ORDER, ig_profile_username, is_ig_story, is_spotify, is_apple_music
 from .queue import enqueue, QueueFull
@@ -151,8 +153,27 @@ async def on_pick(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(t(lang, "queued", pos=pos, jid=jid))
     except QueueFull:
         await q.edit_message_text(t(lang, "queue_full"))
+HEARTBEAT_PATH = "/data/bot_heartbeat"
+async def _heartbeat_loop():
+    """Touch a heartbeat file every 60s so the host watchdog can tell a
+    live event loop from a dead one."""
+    while True:
+        try:
+            with open(HEARTBEAT_PATH, "w") as f: f.write(str(int(_time.time())))
+        except Exception:
+            pass
+        await asyncio.sleep(60)
+async def _post_init(app):
+    asyncio.create_task(_heartbeat_loop())
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    # Hardened polling: the 2026-10-22 stall was a silently hung long-poll
+    # (container Up, zero errors, no updates for 40+ min). Explicit HTTP
+    # timeouts make a half-open connection RAISE instead of hanging, and
+    # bootstrap_retries=-1 makes the updater retry forever on its own.
+    req = HTTPXRequest(connect_timeout=10, read_timeout=30, write_timeout=30, pool_timeout=10)
+    gu_req = HTTPXRequest(connect_timeout=10, read_timeout=45, write_timeout=30, pool_timeout=10)
+    app = (Application.builder().token(BOT_TOKEN)
+           .request(req).get_updates_request(gu_req).post_init(_post_init).build())
     app.add_handler(CommandHandler("start", start)); app.add_handler(CommandHandler("help", start))
     app.add_handler(CommandHandler("language", language_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
@@ -160,5 +181,5 @@ def main():
     app.add_handler(CallbackQueryHandler(on_lang_menu, pattern=r"^langmenu$"))
     app.add_handler(CallbackQueryHandler(on_pick, pattern=r"^dl:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling(drop_pending_updates=True, timeout=30, bootstrap_retries=-1)
 if __name__ == "__main__": main()
