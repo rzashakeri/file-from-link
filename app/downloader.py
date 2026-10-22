@@ -8,6 +8,7 @@ Mitigations built in, tried in order:
   3. Fallback player clients (tv, web_safari, ios) retried automatically.
 """
 from pathlib import Path
+import shutil
 import yt_dlp
 from .config import DOWNLOAD_DIR, COOKIES_FILE, IG_COOKIES_FILE, X_COOKIES_FILE, JOB_TIMEOUT, POT_BASE_URL, PROXY, MAX_FILE_BYTES
 from .utils import format_selector, is_spotify, is_apple_music
@@ -102,20 +103,30 @@ def _shortcode_id(code: str) -> int:
 def _ig_slide_count(url: str) -> int:
     """Slides in an Instagram post via the media-info API; 0 on any error.
     An all-video carousel fools yt-dlp into downloading only slide 1 (no
-    'No video formats found' error), so download() checks this FIRST."""
-    import httpx, re as _re
+    'No video formats found' error), so download() checks this FIRST.
+    Retries once on transient failures: a single flaky 429 must not be
+    mistaken for 'not a carousel' — that mistake ships a silent 1-slide result."""
+    import httpx, re as _re, time as _time
     from .ig import _ig_cookie_header, _UA
     m = _re.search(r"instagram\.com/(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)", url)
     if not m: return 0
-    try:
-        headers = {**_UA, "X-IG-App-ID": "936619743392459", **_ig_cookie_header()}
-        r = httpx.get(f"https://i.instagram.com/api/v1/media/{_shortcode_id(m.group(1))}/info/",
-                      headers=headers, timeout=15, follow_redirects=True)
-        items = r.json().get("items") or []
-        if not items: return 0
-        return len(items[0].get("carousel_media") or [])
-    except Exception:
-        return 0
+    headers = {**_UA, "X-IG-App-ID": "936619743392459", **_ig_cookie_header()}
+    media_id = _shortcode_id(m.group(1))
+    for attempt in (1, 2):
+        try:
+            r = httpx.get(f"https://i.instagram.com/api/v1/media/{media_id}/info/",
+                          headers=headers, timeout=15, follow_redirects=True)
+            if r.status_code == 429 and attempt == 1:
+                _time.sleep(4); continue
+            r.raise_for_status()
+            items = r.json().get("items") or []
+            if not items: return 0
+            return len(items[0].get("carousel_media") or [])
+        except Exception:
+            if attempt == 1:
+                _time.sleep(4); continue
+            return 0
+    return 0
 
 def _ig_api_download(url: str, choice: str, job_id: str, on_progress=None):
     """Photo posts and carousels: yt-dlp's Instagram extractor only sees
@@ -149,7 +160,7 @@ def _ig_api_download(url: str, choice: str, job_id: str, on_progress=None):
         return _extract_once(vids[0], choice, job_id, on_progress, None)
     dest = Path(DOWNLOAD_DIR / job_id); dest.mkdir(parents=True, exist_ok=True)
     files = []
-    media = media[:10]
+    media = media[:20]  # Instagram allows up to 20 slides per carousel
     with httpx.Client(timeout=180, follow_redirects=True) as client:
         for i, (kind, mu) in enumerate(media, 1):
             fp = dest / f"slide_{i:02d}{'.mp4' if kind == 'video' else '.jpg'}"
@@ -164,8 +175,27 @@ def _ig_api_download(url: str, choice: str, job_id: str, on_progress=None):
 
 def download(url: str, choice: str, job_id: str, on_progress=None) -> tuple[Path, dict]:
     Path(DOWNLOAD_DIR / job_id).mkdir(parents=True, exist_ok=True)
-    if "instagram.com" in url and "/p/" in url and _ig_slide_count(url) > 1:
-        return _ig_api_download(url, choice, job_id, on_progress)
+    if "instagram.com" in url and "/p/" in url:
+        n = _ig_slide_count(url)
+        if n > 1:
+            return _ig_api_download(url, choice, job_id, on_progress)
+        if n == 0:
+            # Probe failed (flaky API / 429) — we cannot tell a single post
+            # from a carousel, and yt-dlp silently ships only slide 1 of an
+            # all-video carousel. So download via yt-dlp first, then re-probe:
+            # if the post really has >1 slides, redo it through the API path
+            # instead of delivering a partial result to the user.
+            try:
+                path, meta = _download_ytdlp(url, choice, job_id, on_progress)
+            except DownloadError as e:
+                if "No video formats found" in str(e):
+                    return _ig_api_download(url, choice, job_id, on_progress)
+                raise
+            if _ig_slide_count(url) > 1:
+                shutil.rmtree(Path(DOWNLOAD_DIR / job_id), ignore_errors=True)
+                Path(DOWNLOAD_DIR / job_id).mkdir(parents=True, exist_ok=True)
+                return _ig_api_download(url, choice, job_id, on_progress)
+            return path, meta
     try:
         return _download_ytdlp(url, choice, job_id, on_progress)
     except DownloadError as e:
