@@ -34,9 +34,14 @@ def _build_opts(choice, job_id, on_progress, player_client=None, url: str = ''):
         opts["cookiefile"] = IG_COOKIES_FILE
     elif COOKIES_FILE and Path(COOKIES_FILE).exists():
         opts["cookiefile"] = COOKIES_FILE
-    if choice in ("audio", "audiolow"):
-        q = "192" if choice == "audio" else "48"
+    if choice in ("audiohq", "audio", "audiolow"):
+        q = {"audiohq": "320", "audio": "192", "audiolow": "48"}[choice]
         opts["postprocessors"] = [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": q}]
+    else:
+        # Video jobs also fetch subtitles (fa/en, incl. auto-captions) and the
+        # description — the worker delivers them alongside the file.
+        opts.update({"writesubtitles": True, "writeautomaticsub": True,
+                     "subtitleslangs": ["fa.*", "en.*"], "subtitlesformat": "srt/vtt/best"})
     return opts
 def _aparat_resolve(url: str):
     """yt-dlp's Aparat extractor is broken against Aparat's current pages
@@ -62,12 +67,19 @@ def _extract_once(url, choice, job_id, on_progress, player_client=None):
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
         path = Path(ydl.prepare_filename(info))
-        if choice == "audio": path = path.with_suffix(".mp3")
+        if choice in ("audiohq", "audio", "audiolow"): path = path.with_suffix(".mp3")
         if not path.exists():
-            files = sorted(Path(DOWNLOAD_DIR / job_id).glob("*"), key=lambda p: p.stat().st_size, reverse=True)
+            files = sorted((f for f in Path(DOWNLOAD_DIR / job_id).glob("*") if f.suffix.lower() not in (".srt", ".vtt")),
+                           key=lambda p: p.stat().st_size, reverse=True)
             if not files: raise DownloadError("no output file")
             path = files[0]
-        return path, {"title": info.get("title", ""), "duration": info.get("duration"), "extractor": info.get("extractor_key", "")}
+        subs = sorted((f for f in Path(DOWNLOAD_DIR / job_id).glob("*")
+                       if f.suffix.lower() in (".srt", ".vtt") and f != path),
+                      key=lambda f: (f.suffix.lower() != ".srt", f.name))[:2]
+        return path, {"title": info.get("title", ""), "duration": info.get("duration"),
+                      "extractor": info.get("extractor_key", ""),
+                      "description": (info.get("description") or "").strip(),
+                      "subtitles": [str(s) for s in subs]}
 def download(url: str, choice: str, job_id: str, on_progress=None) -> tuple[Path, dict]:
     Path(DOWNLOAD_DIR / job_id).mkdir(parents=True, exist_ok=True)
     attempts = [None] + FALLBACK_CLIENTS if "youtu" in url else [None]
@@ -108,6 +120,34 @@ def _est_size(f: dict, duration: float) -> float:
     if f.get("filesize_approx"): return float(f["filesize_approx"])
     if f.get("tbr") and duration: return float(f["tbr"]) * 1000 / 8 * duration
     return 0.0
+
+def _aggregate(info, heights: dict) -> None:
+    fmts = info.get("formats") or []
+    dur = float(info.get("duration") or 0)
+    aud = max((_est_size(f, dur) for f in fmts
+               if f.get("acodec") not in (None, "none") and f.get("vcodec") in (None, "none")), default=0.0)
+    for f in fmts:
+        h = f.get("height")
+        if not h or f.get("vcodec") in (None, "none", "images"): continue
+        if str(f.get("format_id", "")).startswith("sb"): continue
+        total = _est_size(f, dur) + (aud if f.get("acodec") in (None, "none") else 0.0)
+        if total > heights.get(h, 0): heights[h] = total
+
+def _to_quality_list(heights: dict) -> list[dict]:
+    return [{"height": h, "mb": (heights[h] / 1048576) if heights[h] else None}
+            for h in sorted(heights, reverse=True)]
+
+def list_qualities_generic(url: str) -> list[dict]:
+    """Single quick probe for non-YouTube sources (Instagram, TikTok, X, ...).
+    Returns [] when the site will not describe its formats — the caller then
+    falls back to the static quality list."""
+    opts = _build_opts("best", "probe", None, None, url)
+    opts.pop("writesubtitles", None); opts.pop("writeautomaticsub", None)
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    heights: dict[int, float] = {}
+    _aggregate(info, heights)
+    return _to_quality_list(heights)
 
 def list_qualities(url: str) -> list[dict]:
     """Real downloadable resolutions for THIS video (union across the player
