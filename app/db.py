@@ -46,6 +46,13 @@ def queue_position(jid):
         r = con.execute("SELECT created FROM jobs WHERE id=?", (jid,)).fetchone()
         if not r: return None
         return con.execute("SELECT COUNT(*) c FROM jobs WHERE status='queued' AND created<=?", (r["created"],)).fetchone()["c"]
+def stale_active_jobs(max_age_seconds):
+    """Jobs stuck in downloading/uploading whose last update is older than max_age."""
+    cutoff = time.time() - max_age_seconds
+    with _c() as con:
+        rows = con.execute("SELECT * FROM jobs WHERE status IN ('downloading','uploading') AND updated<?",
+                           (cutoff,)).fetchall()
+    return [dict(r) for r in rows]
 def stats():
     import time as _t
     day_start = _t.time() - (_t.time() % 86400)
