@@ -2,7 +2,7 @@ import shutil
 from pathlib import Path
 from . import db
 from .downloader import download, DownloadError, get_direct_url, resolve_stream_match
-from .sender import deliver, send_text, edit_text
+from .sender import deliver, send_text, edit_text, send_document_file
 from .config import DOWNLOAD_DIR, TELEGRAM_LIMIT, JOB_TIMEOUT
 from .i18n import t as tr
 from .utils import is_spotify, is_apple_music
@@ -33,6 +33,7 @@ def process_job(job_id: str, status_message_id: int | None = None):
             try: direct = get_direct_url(job["url"], fmt)
             except Exception: direct = None
         deliver(chat_id, path, meta.get("title",""), lang, direct)
+        _deliver_extras(chat_id, job_id, meta, lang)
         db.update_job(job_id, status="done")
         if status_message_id: edit_text(chat_id, status_message_id, tr(lang, "done", title=meta.get("title","")))
     except DownloadError as e:
@@ -70,3 +71,26 @@ def reconcile_stale() -> int:
     for job in stale:
         _fail_and_notify(job, "timeout (watchdog)")
     return len(stale)
+
+def _deliver_extras(chat_id, job_id, meta, lang):
+    """User-requested extras: the video's full description and its
+    subtitles (fa/en incl. auto-captions), sent after the file itself.
+    Best-effort only — a failure here never fails the job."""
+    footer = tr(lang, "footer")
+    desc = (meta.get("description") or "").strip()
+    if len(desc) > 30:
+        try:
+            header = tr(lang, "description")
+            if len(desc) <= 3500:
+                send_text(chat_id, f"{header}\n\n{desc}\n\n{footer}")
+            else:
+                f = Path(DOWNLOAD_DIR) / job_id / "description.txt"
+                f.write_text(desc, encoding="utf-8")
+                send_document_file(chat_id, f, f"{header}\n{footer}")
+        except Exception:
+            pass
+    for sub in meta.get("subtitles") or []:
+        try:
+            send_document_file(chat_id, Path(sub), footer)
+        except Exception:
+            pass
