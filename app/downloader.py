@@ -93,8 +93,67 @@ def _extract_once(url, choice, job_id, on_progress, player_client=None):
                       "extractor": info.get("extractor_key", ""),
                       "description": (info.get("description") or "").strip(),
                       "subtitles": [str(s) for s in subs]}
+_IG_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+def _shortcode_id(code: str) -> int:
+    n = 0
+    for ch in code: n = n * 64 + _IG_ALPHABET.index(ch)
+    return n
+
+def _ig_api_download(url: str, choice: str, job_id: str, on_progress=None):
+    """Photo posts and carousels: yt-dlp's Instagram extractor only sees
+    videos ('No video formats found!'), but the media-info API (with the
+    burner session) returns every slide. Downloads all slides as
+    originals; audio choices extract from the first video slide."""
+    import httpx, re as _re
+    from .ig import _ig_cookie_header, _UA
+    m = _re.search(r"instagram\.com/(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)", url)
+    if not m: raise DownloadError("could not parse the Instagram link")
+    headers = {**_UA, "X-IG-App-ID": "936619743392459", **_ig_cookie_header()}
+    r = httpx.get(f"https://i.instagram.com/api/v1/media/{_shortcode_id(m.group(1))}/info/",
+                  headers=headers, timeout=30, follow_redirects=True)
+    if r.status_code != 200: raise DownloadError(f"Instagram refused the request ({r.status_code})")
+    items = r.json().get("items") or []
+    if not items: raise DownloadError("post not found (private or deleted?)")
+    item = items[0]
+    caption = ((item.get("caption") or {}).get("text") or "").strip()
+    title = (caption.split("\n")[0][:80] if caption else "") or (item.get("user") or {}).get("username") or "Instagram post"
+    media = []
+    for s in (item.get("carousel_media") or [item]):
+        if s.get("video_versions"):
+            vv = max(s["video_versions"], key=lambda v: (v.get("width") or 0) * (v.get("height") or 0))
+            media.append(("video", vv["url"]))
+        elif (s.get("image_versions2") or {}).get("candidates"):
+            media.append(("image", s["image_versions2"]["candidates"][0]["url"]))
+    if not media: raise DownloadError("no media found in this post")
+    if choice in ("audiohq", "audio", "audiolow"):
+        vids = [u for k, u in media if k == "video"]
+        if not vids: raise DownloadError("This post has no video to extract audio from.")
+        return _extract_once(vids[0], choice, job_id, on_progress, None)
+    dest = Path(DOWNLOAD_DIR / job_id); dest.mkdir(parents=True, exist_ok=True)
+    files = []
+    media = media[:10]
+    with httpx.Client(timeout=180, follow_redirects=True) as client:
+        for i, (kind, mu) in enumerate(media, 1):
+            fp = dest / f"slide_{i:02d}{'.mp4' if kind == 'video' else '.jpg'}"
+            with client.stream("GET", mu, headers=_UA) as resp:
+                resp.raise_for_status()
+                with open(fp, "wb") as f:
+                    for chunk in resp.iter_bytes(1 << 16): f.write(chunk)
+            files.append(fp)
+            if on_progress: on_progress(i, len(media))
+    return files[0], {"title": title, "duration": None, "extractor": "InstagramAPI",
+                      "description": caption, "subtitles": [], "files": [str(f) for f in files]}
+
 def download(url: str, choice: str, job_id: str, on_progress=None) -> tuple[Path, dict]:
     Path(DOWNLOAD_DIR / job_id).mkdir(parents=True, exist_ok=True)
+    try:
+        return _download_ytdlp(url, choice, job_id, on_progress)
+    except DownloadError as e:
+        if "instagram.com" in url and "No video formats found" in str(e):
+            return _ig_api_download(url, choice, job_id, on_progress)
+        raise
+
+def _download_ytdlp(url: str, choice: str, job_id: str, on_progress=None) -> tuple[Path, dict]:
     attempts = [None] + FALLBACK_CLIENTS if "youtu" in url else [None]
     last_error = None
     for client in attempts:
