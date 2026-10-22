@@ -5,13 +5,13 @@ welcome, quality picker, queue position, progress, delivery — uses it.
 Change it anytime with /language."""
 import asyncio, io, logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters, TypeHandler
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters, TypeHandler, ApplicationHandlerStop
 import json as _json
 from telegram.request import HTTPXRequest
 import time as _time
 from .config import BOT_TOKEN, OWNER_ID, PUBLIC_DIR
 from .utils import extract_urls, FORMAT_ORDER, ig_profile_username, is_ig_story, is_spotify, is_apple_music
-from .queue import enqueue, QueueFull
+from .queue import enqueue, QueueFull, enqueue_broadcast
 from . import db
 from .i18n import LANGUAGES, t, fmt_label
 from .downloader import list_qualities, list_qualities_generic
@@ -81,6 +81,67 @@ async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
     else:
         await u.message.reply_text(t(lang, "welcome"),
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🌐 Language / زبان", callback_data="langmenu")]]))
+BC_STATE: dict[int, dict] = {}
+def _admin_markup(lang):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t(lang, "btn_stats"), callback_data="adm:stats")],
+        [InlineKeyboardButton(t(lang, "btn_broadcast"), callback_data="adm:bcast")]])
+def _is_owner(u: Update) -> bool:
+    return bool(OWNER_ID) and u.effective_user and u.effective_user.id == OWNER_ID
+async def admin_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    if not _is_owner(u): return
+    lang = lang_of(u) or "fa"
+    await u.message.reply_text(t(lang, "admin_panel"), reply_markup=_admin_markup(lang))
+async def on_admin(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    q = u.callback_query; await q.answer()
+    if not _is_owner(u): return
+    lang = lang_of(u) or "fa"
+    chat = u.effective_chat.id
+    action = q.data.split(":", 1)[1]
+    if action == "stats":
+        s = db.stats()
+        total = 0
+        try:
+            for r, _dirs, files in __import__("os").walk(PUBLIC_DIR):
+                for f in files:
+                    try: total += __import__("os").path.getsize(__import__("os").path.join(r, f))
+                    except OSError: pass
+        except Exception:
+            pass
+        storage = f"{total/1073741824:.1f} GB" if total >= 1073741824 else f"{total//1048576} MB"
+        await q.edit_message_text(t(lang, "stats", storage=storage, **s), reply_markup=_admin_markup(lang))
+    elif action == "menu":
+        BC_STATE.pop(chat, None)
+        await q.edit_message_text(t(lang, "admin_panel"), reply_markup=_admin_markup(lang))
+    elif action == "bcast":
+        BC_STATE[chat] = {"stage": "await_msg"}
+        await q.edit_message_text(t(lang, "broadcast_prompt"),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "btn_cancel"), callback_data="adm:cancel")]]))
+    elif action == "cancel":
+        BC_STATE.pop(chat, None)
+        await q.edit_message_text(t(lang, "cancelled"), reply_markup=_admin_markup(lang))
+    elif action == "go":
+        st = BC_STATE.pop(chat, None)
+        if not st or "message_id" not in st:
+            await q.edit_message_text(t(lang, "expired"), reply_markup=_admin_markup(lang)); return
+        n = len(db.all_user_ids())
+        msg = await q.edit_message_text(t(lang, "broadcast_started", n=n))
+        enqueue_broadcast(chat, st["from_chat"], st["message_id"], msg.message_id, lang)
+async def _broadcast_capture(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    """Group -1: while the owner is composing a broadcast, swallow their
+    next message as the broadcast content and ask for confirmation."""
+    if not _is_owner(u) or not u.effective_message: return
+    chat = u.effective_chat.id
+    st = BC_STATE.get(chat)
+    if not st or st.get("stage") != "await_msg": return
+    lang = lang_of(u) or "fa"
+    BC_STATE[chat] = {"stage": "await_confirm", "from_chat": chat, "message_id": u.effective_message.message_id}
+    n = len(db.all_user_ids())
+    markup = InlineKeyboardMarkup([[
+        InlineKeyboardButton(t(lang, "btn_send_all"), callback_data="adm:go"),
+        InlineKeyboardButton(t(lang, "btn_cancel"), callback_data="adm:cancel")]])
+    await u.effective_message.reply_text(t(lang, "broadcast_confirm", n=n), reply_markup=markup)
+    raise ApplicationHandlerStop
 async def stats_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
     if not OWNER_ID or u.effective_user.id != OWNER_ID:
         return  # owner-only: silent for everyone else
@@ -192,6 +253,9 @@ def main():
     app.add_handler(CommandHandler("start", start)); app.add_handler(CommandHandler("help", start))
     app.add_handler(CommandHandler("language", language_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
+    app.add_handler(CommandHandler("admin", admin_cmd))
+    app.add_handler(CallbackQueryHandler(on_admin, pattern=r"^adm:"))
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, _broadcast_capture), group=-1)
     app.add_handler(CallbackQueryHandler(on_lang_pick, pattern=r"^lang:"))
     app.add_handler(CallbackQueryHandler(on_lang_menu, pattern=r"^langmenu$"))
     app.add_handler(CallbackQueryHandler(on_pick, pattern=r"^dl:"))
