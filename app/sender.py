@@ -13,6 +13,8 @@ def tg(method, **kw):
                    files={k:v for k,v in kw.items() if isinstance(v, tuple)})
         r.raise_for_status(); return r.json()
 def send_text(chat_id, text, **kw): return tg("sendMessage", chat_id=chat_id, text=text, **kw)
+def copy_message(chat_id, from_chat_id, message_id):
+    return tg("copyMessage", chat_id=chat_id, from_chat_id=from_chat_id, message_id=message_id)
 def edit_text(chat_id, message_id, text):
     try: return tg("editMessageText", chat_id=chat_id, message_id=message_id, text=text)
     except Exception: return None
