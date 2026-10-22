@@ -53,6 +53,10 @@ def stale_active_jobs(max_age_seconds):
         rows = con.execute("SELECT * FROM jobs WHERE status IN ('downloading','uploading') AND updated<?",
                            (cutoff,)).fetchall()
     return [dict(r) for r in rows]
+def all_user_ids():
+    with _c() as con:
+        rows = con.execute("SELECT user_id FROM users UNION SELECT user_id FROM jobs").fetchall()
+    return [r[0] for r in rows]
 def stats():
     import time as _t
     day_start = _t.time() - (_t.time() % 86400)
