@@ -24,13 +24,28 @@ def _ig_cookie_header() -> dict:
     if jar.get("csrftoken"): h["X-CSRFToken"] = jar["csrftoken"]
     return h
 def fetch_profile_pic(username: str) -> bytes:
-    headers = {**_UA, "X-IG-App-ID": "936619743392459", **_ig_cookie_header()}
-    r = httpx.get("https://i.instagram.com/api/v1/users/web_profile_info/",
-                  params={"username": username}, headers=headers,
-                  timeout=20, follow_redirects=True)
-    if r.status_code != 200: raise RuntimeError(f"instagram api {r.status_code}")
-    user = (r.json().get("data") or {}).get("user") or {}
-    pic_url = user.get("profile_pic_url_hd") or user.get("profile_pic_url")
+    cookies = _ig_cookie_header()
+    headers = {**_UA, "X-IG-App-ID": "936619743392459", **cookies}
+    pic_url = None
+    try:
+        r = httpx.get("https://i.instagram.com/api/v1/users/web_profile_info/",
+                      params={"username": username}, headers=headers,
+                      timeout=20, follow_redirects=True)
+        if r.status_code == 200:
+            user = (r.json().get("data") or {}).get("user") or {}
+            pic_url = user.get("profile_pic_url_hd") or user.get("profile_pic_url")
+    except Exception:
+        pic_url = None
+    if not pic_url and cookies:
+        # Logged-in profile pages carry the REAL pic as og:image (logged out
+        # it is Instagram's generic image — that is why this fallback exists
+        # ONLY when a session cookie is available). The API itself 429s
+        # datacenter IPs even with a valid session.
+        import re as _re
+        html = httpx.get(f"https://www.instagram.com/{username}/",
+                         headers={**_UA, **cookies}, timeout=20, follow_redirects=True).text
+        m = _re.search(r'property="og:image" content="([^"]+)"', html)
+        if m: pic_url = m.group(1).replace("&amp;", "&")
     if not pic_url: raise RuntimeError("profile picture not found")
     img = httpx.get(pic_url, headers=_UA, timeout=30, follow_redirects=True)
     img.raise_for_status()
