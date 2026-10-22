@@ -14,7 +14,7 @@ from .utils import extract_urls, FORMAT_ORDER, ig_profile_username, is_ig_story,
 from .queue import enqueue, QueueFull
 from . import db
 from .i18n import LANGUAGES, t, fmt_label
-from .downloader import list_qualities
+from .downloader import list_qualities, list_qualities_generic
 from .ig import fetch_profile_pic
 logging.basicConfig(level=logging.INFO)
 PENDING: dict[int, str] = {}
@@ -55,13 +55,19 @@ def dynamic_markup(lang, qualities):
     for q in qualities[:8]:
         label = f"📹 {q['height']}p" + (f" · ~{q['mb']:.0f} MB" if q.get("mb") else "")
         rows.append([InlineKeyboardButton(label, callback_data=f"dl:h{q['height']}")])
-    rows.append([InlineKeyboardButton(fmt_label(lang, "audio"), callback_data="dl:audio")])
-    rows.append([InlineKeyboardButton(fmt_label(lang, "audiolow"), callback_data="dl:audiolow")])
+    for a in ("audiohq", "audio", "audiolow"):
+        rows.append([InlineKeyboardButton(fmt_label(lang, a), callback_data=f"dl:{a}")])
     return InlineKeyboardMarkup(rows)
 async def probe_markup(lang, url):
-    """Buttons from the video's REAL formats; falls back to the static list."""
+    """Buttons from the video's REAL formats; falls back to the static list.
+    YouTube gets the rich multi-client probe; every other site gets one
+    quick generic probe (2026-10-22: the quality picker is back for ALL
+    sites, per user requests)."""
     try:
-        qualities = await asyncio.to_thread(list_qualities, url)
+        if _is_youtube(url):
+            qualities = await asyncio.to_thread(list_qualities, url)
+        else:
+            qualities = await asyncio.to_thread(list_qualities_generic, url)
     except Exception:
         qualities = []
     return dynamic_markup(lang, qualities) if qualities else quality_markup(lang)
@@ -100,7 +106,7 @@ async def on_lang_pick(u: Update, c: ContextTypes.DEFAULT_TYPE):
     if lang not in LANGUAGES: lang = "en"
     db.set_lang(u.effective_user.id, lang)
     url = PENDING.pop(u.effective_chat.id, None)
-    if url and _is_youtube(url):
+    if url and not is_spotify(url) and not is_apple_music(url) and not ig_profile_username(url) and not is_ig_story(url):
         PENDING[u.effective_chat.id] = url
         await q.edit_message_text(t(lang, "probing"))
         markup = await probe_markup(lang, url)
@@ -133,15 +139,14 @@ async def on_message(u: Update, c: ContextTypes.DEFAULT_TYPE):
     username = ig_profile_username(url)
     if username:
         await _send_profile_pic(u, username, lang); return
-    if _is_youtube(url):
-        PENDING[u.effective_chat.id] = url
-        msg = await u.message.reply_text(t(lang, "probing"))
-        markup = await probe_markup(lang, url)
-        await msg.edit_text(t(lang, "quality_question", url=url), reply_markup=markup)
-    elif is_spotify(url) or is_apple_music(url):
-        await _direct_message(u, url, lang, "audio")
-    else:
-        await _direct_message(u, url, lang)
+    if is_spotify(url) or is_apple_music(url):
+        await _direct_message(u, url, lang, "audio"); return
+    if is_ig_story(url):
+        await _direct_message(u, url, lang); return
+    PENDING[u.effective_chat.id] = url
+    msg = await u.message.reply_text(t(lang, "probing"))
+    markup = await probe_markup(lang, url)
+    await msg.edit_text(t(lang, "quality_question", url=url), reply_markup=markup)
 async def on_pick(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     lang = lang_of(u) or "en"
