@@ -181,5 +181,5 @@ def main():
     app.add_handler(CallbackQueryHandler(on_lang_menu, pattern=r"^langmenu$"))
     app.add_handler(CallbackQueryHandler(on_pick, pattern=r"^dl:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
-    app.run_polling(drop_pending_updates=True, timeout=30, bootstrap_retries=-1)
+    app.run_polling(drop_pending_updates=False, timeout=30, bootstrap_retries=-1)  # False: never eat user messages across a restart (2026-10-22: the owner's /stats sent during a stall were silently discarded by True)
 if __name__ == "__main__": main()
