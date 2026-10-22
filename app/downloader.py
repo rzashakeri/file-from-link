@@ -39,11 +39,6 @@ def _build_opts(choice, job_id, on_progress, player_client=None, url: str = ''):
     if choice in ("audiohq", "audio", "audiolow"):
         q = {"audiohq": "320", "audio": "192", "audiolow": "48"}[choice]
         opts["postprocessors"] = [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": q}]
-    else:
-        # Video jobs also fetch subtitles (fa/en, incl. auto-captions) and the
-        # description — the worker delivers them alongside the file.
-        opts.update({"writesubtitles": True, "writeautomaticsub": True,
-                     "subtitleslangs": ["fa.*", "en.*"], "subtitlesformat": "srt/vtt/best"})
     return opts
 def _aparat_resolve(url: str):
     """yt-dlp's Aparat extractor is broken against Aparat's current pages
@@ -64,6 +59,20 @@ def _aparat_resolve(url: str):
             cands = {"q": key, "url": u}
     if not cands.get("url"): return None
     return cands["url"], title
+def _fetch_subtitles(url, job_id, player_client=None):
+    """Best-effort subtitle grab (fa/en incl. auto-captions), isolated from
+    the media download: a subtitle 429 must NEVER fail the whole job
+    (regression found live 2026-10-22 on the features deploy)."""
+    try:
+        opts = _build_opts("best", job_id, None, player_client, url)
+        opts.update({"skip_download": True, "writesubtitles": True, "writeautomaticsub": True,
+                     "subtitleslangs": ["fa.*", "en.*"], "subtitlesformat": "srt/vtt/best",
+                     "retries": 1, "socket_timeout": 15})
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.extract_info(url, download=True)
+    except Exception:
+        pass
+
 def _extract_once(url, choice, job_id, on_progress, player_client=None):
     opts = _build_opts(choice, job_id, on_progress, player_client, url)
     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -75,6 +84,8 @@ def _extract_once(url, choice, job_id, on_progress, player_client=None):
                            key=lambda p: p.stat().st_size, reverse=True)
             if not files: raise DownloadError("no output file")
             path = files[0]
+        if choice not in ("audiohq", "audio", "audiolow"):
+            _fetch_subtitles(url, job_id, player_client)
         subs = sorted((f for f in Path(DOWNLOAD_DIR / job_id).glob("*")
                        if f.suffix.lower() in (".srt", ".vtt") and f != path),
                       key=lambda f: (f.suffix.lower() != ".srt", f.name))[:2]
