@@ -15,3 +15,8 @@ def enqueue(chat_id, user_id, url, fmt, status_message_id=None, lang='en') -> tu
     from .tasks import on_job_failure
     q().enqueue("app.tasks.process_job", jid, status_message_id, job_timeout=JOB_TIMEOUT, result_ttl=3600, failure_ttl=86400, on_failure=on_job_failure)
     return jid, (db.queue_position(jid) or 1)
+
+def enqueue_broadcast(owner_chat_id, from_chat_id, message_id, status_message_id, lang="en"):
+    return q().enqueue("app.tasks.broadcast_job", owner_chat_id, from_chat_id,
+                       message_id, status_message_id, lang,
+                       job_timeout=7200, result_ttl=3600, failure_ttl=86400)
