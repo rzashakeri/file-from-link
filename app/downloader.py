@@ -99,6 +99,24 @@ def _shortcode_id(code: str) -> int:
     for ch in code: n = n * 64 + _IG_ALPHABET.index(ch)
     return n
 
+def _ig_slide_count(url: str) -> int:
+    """Slides in an Instagram post via the media-info API; 0 on any error.
+    An all-video carousel fools yt-dlp into downloading only slide 1 (no
+    'No video formats found' error), so download() checks this FIRST."""
+    import httpx, re as _re
+    from .ig import _ig_cookie_header, _UA
+    m = _re.search(r"instagram\.com/(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)", url)
+    if not m: return 0
+    try:
+        headers = {**_UA, "X-IG-App-ID": "936619743392459", **_ig_cookie_header()}
+        r = httpx.get(f"https://i.instagram.com/api/v1/media/{_shortcode_id(m.group(1))}/info/",
+                      headers=headers, timeout=15, follow_redirects=True)
+        items = r.json().get("items") or []
+        if not items: return 0
+        return len(items[0].get("carousel_media") or [])
+    except Exception:
+        return 0
+
 def _ig_api_download(url: str, choice: str, job_id: str, on_progress=None):
     """Photo posts and carousels: yt-dlp's Instagram extractor only sees
     videos ('No video formats found!'), but the media-info API (with the
@@ -146,6 +164,8 @@ def _ig_api_download(url: str, choice: str, job_id: str, on_progress=None):
 
 def download(url: str, choice: str, job_id: str, on_progress=None) -> tuple[Path, dict]:
     Path(DOWNLOAD_DIR / job_id).mkdir(parents=True, exist_ok=True)
+    if "instagram.com" in url and "/p/" in url and _ig_slide_count(url) > 1:
+        return _ig_api_download(url, choice, job_id, on_progress)
     try:
         return _download_ytdlp(url, choice, job_id, on_progress)
     except DownloadError as e:
