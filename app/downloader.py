@@ -9,7 +9,7 @@ Mitigations built in, tried in order:
 """
 from pathlib import Path
 import yt_dlp
-from .config import DOWNLOAD_DIR, COOKIES_FILE, IG_COOKIES_FILE, JOB_TIMEOUT, POT_BASE_URL, PROXY, MAX_FILE_BYTES
+from .config import DOWNLOAD_DIR, COOKIES_FILE, IG_COOKIES_FILE, X_COOKIES_FILE, JOB_TIMEOUT, POT_BASE_URL, PROXY, MAX_FILE_BYTES
 from .utils import format_selector, is_spotify, is_apple_music
 class DownloadError(Exception): pass
 BOT_WALL_MARKERS = ("not a bot", "sign in to confirm", "po token", "potoken", "needs to be reloaded", "requested format is not available")
@@ -32,6 +32,8 @@ def _build_opts(choice, job_id, on_progress, player_client=None, url: str = ''):
         opts["extractor_args"]["youtube"] = {"player_client": [player_client]}
     if "instagram.com" in url and IG_COOKIES_FILE and Path(IG_COOKIES_FILE).exists():
         opts["cookiefile"] = IG_COOKIES_FILE
+    elif ("x.com" in url or "twitter.com" in url) and X_COOKIES_FILE and Path(X_COOKIES_FILE).exists():
+        opts["cookiefile"] = X_COOKIES_FILE
     elif COOKIES_FILE and Path(COOKIES_FILE).exists():
         opts["cookiefile"] = COOKIES_FILE
     if choice in ("audiohq", "audio", "audiolow"):
