@@ -3,7 +3,7 @@ from pathlib import Path
 from . import db
 from .downloader import download, DownloadError, get_direct_url, resolve_stream_match
 from .sender import deliver, send_text, edit_text
-from .config import DOWNLOAD_DIR, TELEGRAM_LIMIT
+from .config import DOWNLOAD_DIR, TELEGRAM_LIMIT, JOB_TIMEOUT
 from .i18n import t as tr
 from .utils import is_spotify, is_apple_music
 from .cleanup import sweep_public
@@ -43,3 +43,30 @@ def process_job(job_id: str, status_message_id: int | None = None):
         send_text(chat_id, tr(lang, "failed_generic"))
     finally:
         shutil.rmtree(DOWNLOAD_DIR/job_id, ignore_errors=True)
+
+def _fail_and_notify(job, reason):
+    try: db.update_job(job["id"], status="failed", error=reason[:500])
+    except Exception: pass
+    try: send_text(job["chat_id"], tr(job.get("lang") or "en", "failed_generic"))
+    except Exception: pass
+    shutil.rmtree(DOWNLOAD_DIR/job["id"], ignore_errors=True)
+
+def on_job_failure(rq_job, connection, exc_type, exc_value, tb):
+    """RQ failure callback: fires when a job crashes or hits JOB_TIMEOUT.
+    Without it, a timeout-killed job left the DB row in 'downloading'
+    forever and the user was never told — the bot looked frozen."""
+    try:
+        jid = rq_job.args[0]
+        job = db.get_job(jid)
+        if job and job["status"] not in ("done", "failed"):
+            reason = "timeout" if exc_type and "Timeout" in getattr(exc_type, "__name__", "") else str(exc_value)
+            _fail_and_notify(job, reason or "worker error")
+    except Exception:
+        pass
+
+def reconcile_stale() -> int:
+    """Watchdog entrypoint: fail jobs stuck active beyond timeout + grace."""
+    stale = db.stale_active_jobs(JOB_TIMEOUT + 300)
+    for job in stale:
+        _fail_and_notify(job, "timeout (watchdog)")
+    return len(stale)
