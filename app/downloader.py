@@ -135,10 +135,15 @@ def _ig_api_download(url: str, choice: str, job_id: str, on_progress=None):
     originals; audio choices extract from the first video slide."""
     import httpx, re as _re
     from .ig import _ig_cookie_header, _UA
-    m = _re.search(r"instagram\.com/(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)", url)
-    if not m: raise DownloadError("could not parse the Instagram link")
+    sm = _re.search(r"instagram\.com/stories/[^/]+/(\d{10,})", url)
+    if sm:
+        media_id = int(sm.group(1))
+    else:
+        m = _re.search(r"instagram\.com/(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)", url)
+        if not m: raise DownloadError("could not parse the Instagram link")
+        media_id = _shortcode_id(m.group(1))
     headers = {**_UA, "X-IG-App-ID": "936619743392459", **_ig_cookie_header()}
-    r = httpx.get(f"https://i.instagram.com/api/v1/media/{_shortcode_id(m.group(1))}/info/",
+    r = httpx.get(f"https://i.instagram.com/api/v1/media/{media_id}/info/",
                   headers=headers, timeout=30, follow_redirects=True)
     if r.status_code != 200: raise DownloadError(f"Instagram refused the request ({r.status_code})")
     items = r.json().get("items") or []
@@ -175,6 +180,12 @@ def _ig_api_download(url: str, choice: str, job_id: str, on_progress=None):
 
 def download(url: str, choice: str, job_id: str, on_progress=None) -> tuple[Path, dict]:
     Path(DOWNLOAD_DIR / job_id).mkdir(parents=True, exist_ok=True)
+    # Stories: yt-dlp's story extractor is broken against current Instagram
+    # (its video-info sub-request fails with HTTP 400 even with a valid
+    # session). Story URLs carry the numeric media id — go straight to the API.
+    import re as _re_dl
+    if _re_dl.search(r"instagram\.com/stories/[^/]+/\d{10,}", url):
+        return _ig_api_download(url, choice, job_id, on_progress)
     if "instagram.com" in url and "/p/" in url:
         n = _ig_slide_count(url)
         if n > 1:
