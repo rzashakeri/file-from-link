@@ -76,7 +76,6 @@ async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await u.message.reply_text(t(lang, "welcome"),
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🌐 Language / زبان", callback_data="langmenu")]]))
 async def stats_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    _dbg({"kind": "stats_cmd", "from": u.effective_user.id if u.effective_user else None, "owner_id": OWNER_ID})
     if not OWNER_ID or u.effective_user.id != OWNER_ID:
         return  # owner-only: silent for everyone else
     s = db.stats()
@@ -161,18 +160,6 @@ def _dbg(rec):
         with open(DEBUG_LOG, "a") as f: f.write(_json.dumps(rec) + "\n")
     except Exception:
         pass
-async def _debug_update(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    rec = {"kind": "update", "id": u.update_id}
-    try:
-        msg = u.effective_message
-        if msg:
-            rec.update({"chat": msg.chat_id, "from": msg.from_user.id if msg.from_user else None,
-                        "text": (msg.text or msg.caption or "")[:60]})
-        if u.callback_query:
-            rec.update({"cb": u.callback_query.data, "from": u.callback_query.from_user.id})
-    except Exception as e:
-        rec["parse_err"] = str(e)[:120]
-    _dbg(rec)
 async def _error_handler(u, c):
     _dbg({"kind": "error", "err": str(c.error)[:300]})
 HEARTBEAT_PATH = "/data/bot_heartbeat"
@@ -196,7 +183,6 @@ def main():
     gu_req = HTTPXRequest(connect_timeout=10, read_timeout=45, write_timeout=30, pool_timeout=10)
     app = (Application.builder().token(BOT_TOKEN)
            .request(req).get_updates_request(gu_req).post_init(_post_init).build())
-    app.add_handler(TypeHandler(Update, _debug_update), group=-1000)
     app.add_error_handler(_error_handler)
     app.add_handler(CommandHandler("start", start)); app.add_handler(CommandHandler("help", start))
     app.add_handler(CommandHandler("language", language_cmd))
