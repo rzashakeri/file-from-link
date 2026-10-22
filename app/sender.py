@@ -32,16 +32,23 @@ def _probe_video(path: Path) -> dict:
         return meta
     except Exception:
         return {}
+def send_document_file(chat_id, path: Path, caption: str = ""):
+    with path.open("rb") as f:
+        return tg("sendDocument", chat_id=chat_id, caption=caption[:1000], document=(path.name, f))
 def deliver(chat_id, path: Path, title: str, lang: str = 'en', direct_url: str | None = None) -> str:
     size = path.stat().st_size
+    footer = tr(lang, "footer")
     if size <= TELEGRAM_LIMIT:
-        is_video = path.suffix.lower() in {".mp4",".mkv",".webm",".mov"}
-        method = "sendVideo" if is_video else "sendDocument"
-        field = "video" if method=="sendVideo" else "document"
+        suffix = path.suffix.lower()
+        is_video = suffix in {".mp4",".mkv",".webm",".mov"}
+        is_audio = suffix in {".mp3",".m4a",".ogg",".opus",".flac"}
+        method = "sendVideo" if is_video else ("sendAudio" if is_audio else "sendDocument")
+        field = {"sendVideo": "video", "sendAudio": "audio", "sendDocument": "document"}[method]
         extra = _probe_video(path) if is_video else {}
         if extra: extra["supports_streaming"] = True
+        caption = f"{title or path.name}\n{footer}"[:1000]
         with path.open("rb") as f:
-            tg(method, chat_id=chat_id, caption=(title or path.name)[:1000], **extra, **{field:(path.name, f)})
+            tg(method, chat_id=chat_id, caption=caption, **extra, **{field:(path.name, f)})
         return "file"
     if S3_BUCKET:
         import boto3
@@ -51,7 +58,7 @@ def deliver(chat_id, path: Path, title: str, lang: str = 'en', direct_url: str |
             "get_object", Params={"Bucket":S3_BUCKET,"Key":key}, ExpiresIn=FILE_TTL_HOURS*3600)
         msg = tr(lang, "too_big", title=title, mb=size//1048576, hours=FILE_TTL_HOURS, url=url)
         if direct_url: msg += "\n" + tr(lang, "direct_link", url=direct_url)
-        send_text(chat_id, msg)
+        send_text(chat_id, msg + "\n" + footer)
         return "s3-link"
     token = secrets.token_hex(8); dest = PUBLIC_DIR/token; dest.mkdir(parents=True, exist_ok=True)
     shutil.copy2(path, dest/path.name)
@@ -59,5 +66,5 @@ def deliver(chat_id, path: Path, title: str, lang: str = 'en', direct_url: str |
     url = f"{PUBLIC_BASE_URL}/files/{token}/{enc}" if PUBLIC_BASE_URL else f"/files/{token}/{enc}"
     msg = tr(lang, "too_big", title=title, mb=size//1048576, hours=FILE_TTL_HOURS, url=url)
     if direct_url: msg += "\n" + tr(lang, "direct_link", url=direct_url)
-    send_text(chat_id, msg)
+    send_text(chat_id, msg + "\n" + footer)
     return "link"
