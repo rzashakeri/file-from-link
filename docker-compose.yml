@@ -25,12 +25,11 @@ services:
   worker:
     build: .
     command: ["python","-m","app.worker"]
+    deploy: {replicas: 6}
     env_file: .env
     volumes: [shared-data:/data]
     depends_on: [redis, pot-provider]
     restart: unless-stopped
-    deploy:
-      replicas: 2
 volumes:
   redis-data:
   shared-data:
