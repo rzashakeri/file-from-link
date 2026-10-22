@@ -64,12 +64,10 @@ async def probe_markup(lang, url):
     quick generic probe (2026-10-22: the quality picker is back for ALL
     sites, per user requests)."""
     try:
-        if _is_youtube(url):
-            qualities = await asyncio.to_thread(list_qualities, url)
-        else:
-            qualities = await asyncio.to_thread(list_qualities_generic, url)
+        probe = list_qualities if _is_youtube(url) else list_qualities_generic
+        qualities = await asyncio.wait_for(asyncio.to_thread(probe, url), timeout=25)
     except Exception:
-        qualities = []
+        qualities = []  # timeout or probe error -> static picker, never a hang
     return dynamic_markup(lang, qualities) if qualities else quality_markup(lang)
 def lang_of(u: Update):
     return db.get_lang(u.effective_user.id)
@@ -247,7 +245,12 @@ def main():
     # bootstrap_retries=-1 makes the updater retry forever on its own.
     req = HTTPXRequest(connect_timeout=10, read_timeout=30, write_timeout=30, pool_timeout=10)
     gu_req = HTTPXRequest(connect_timeout=10, read_timeout=45, write_timeout=30, pool_timeout=10)
-    app = (Application.builder().token(BOT_TOKEN)
+    # concurrent_updates is THE fix for the promo-day freezes: PTB processes
+    # updates SEQUENTIALLY by default, so one user's 30-90s quality probe
+    # queued every other user's reply behind it (~1 min freeze, then a burst).
+    # With concurrency on, each update runs in its own task and the ack goes
+    # out immediately; heavy work stays in the workers regardless.
+    app = (Application.builder().token(BOT_TOKEN).concurrent_updates(True)
            .request(req).get_updates_request(gu_req).post_init(_post_init).build())
     app.add_error_handler(_error_handler)
     app.add_handler(CommandHandler("start", start)); app.add_handler(CommandHandler("help", start))
