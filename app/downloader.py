@@ -151,11 +151,18 @@ def _ig_api_download(url: str, choice: str, job_id: str, on_progress=None):
     item = items[0]
     caption = ((item.get("caption") or {}).get("text") or "").strip()
     title = (caption.split("\n")[0][:80] if caption else "") or (item.get("user") or {}).get("username") or "Instagram post"
+    _dm = _re.search(r"(\d{3,4})", choice or "")
+    _target = int(_dm.group(1)) if _dm else None
+    def _pick(versions):
+        if _target:
+            under = [v for v in versions if (v.get("height") or 0) <= _target]
+            if under: return max(under, key=lambda v: (v.get("width") or 0) * (v.get("height") or 0))
+            return min(versions, key=lambda v: v.get("height") or 10 ** 9)
+        return max(versions, key=lambda v: (v.get("width") or 0) * (v.get("height") or 0))
     media = []
     for s in (item.get("carousel_media") or [item]):
         if s.get("video_versions"):
-            vv = max(s["video_versions"], key=lambda v: (v.get("width") or 0) * (v.get("height") or 0))
-            media.append(("video", vv["url"]))
+            media.append(("video", _pick(s["video_versions"])["url"]))
         elif (s.get("image_versions2") or {}).get("candidates"):
             media.append(("image", s["image_versions2"]["candidates"][0]["url"]))
     if not media: raise DownloadError("no media found in this post")
@@ -199,9 +206,8 @@ def download(url: str, choice: str, job_id: str, on_progress=None) -> tuple[Path
             try:
                 path, meta = _download_ytdlp(url, choice, job_id, on_progress)
             except DownloadError as e:
-                if "No video formats found" in str(e):
-                    return _ig_api_download(url, choice, job_id, on_progress)
-                raise
+                try: return _ig_api_download(url, choice, job_id, on_progress)
+                except DownloadError: raise e
             if _ig_slide_count(url) > 1:
                 shutil.rmtree(Path(DOWNLOAD_DIR / job_id), ignore_errors=True)
                 Path(DOWNLOAD_DIR / job_id).mkdir(parents=True, exist_ok=True)
@@ -210,8 +216,9 @@ def download(url: str, choice: str, job_id: str, on_progress=None) -> tuple[Path
     try:
         return _download_ytdlp(url, choice, job_id, on_progress)
     except DownloadError as e:
-        if "instagram.com" in url and "No video formats found" in str(e):
-            return _ig_api_download(url, choice, job_id, on_progress)
+        if "instagram.com" in url and any(s in url for s in ("/p/", "/reel/", "/reels/", "/tv/")):
+            try: return _ig_api_download(url, choice, job_id, on_progress)
+            except DownloadError: pass
         raise
 
 def _download_ytdlp(url: str, choice: str, job_id: str, on_progress=None) -> tuple[Path, dict]:
