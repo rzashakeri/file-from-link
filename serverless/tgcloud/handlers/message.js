@@ -3,24 +3,21 @@
 // quality picker, and hands the job to the EC2 engine via /jobs.
 import { api, db } from 'sdk';
 import { pending } from '../schema.js';
+import { langOf, t, fmtLabel, FORMATS } from '../lib/i18n.js';
 const URL_RE = /https?:\/\/[^\s<>()[\]{}]+/;
-const FORMATS = [
-  ['best', '🎬 بهترین کیفیت'], ['720', '📺 720p'],
-  ['480', '📺 480p'], ['audio', '🎵 فقط صدا (MP3)'],
-];
 export default async function (message) {
   const chatId = message.chat.id;
+  const lang = langOf(message.from);
   const text = message.text || '';
   if (text.startsWith('/start') || text.startsWith('/help')) {
-    await api.sendMessage({ chat_id: chatId,
-      text: '📥 File From Link — send a link, get a file! Send a video link (YouTube, Instagram, TikTok, X, 1,700+ sites), pick a quality — your file lands right here. لینک بفرست، فایل بگیر 👇' });
+    await api.sendMessage({ chat_id: chatId, text: t(lang, 'welcome') });
     return;
   }
   const m = text.match(URL_RE);
-  if (!m) { await api.sendMessage({ chat_id: chatId, text: 'لینکی پیدا نکردم. یک URL کامل بفرست.' }); return; }
+  if (!m) { await api.sendMessage({ chat_id: chatId, text: t(lang, 'no_url') }); return; }
   const url = m[0].replace(/[.,;:!?]+$/, '');
   await db.insert(pending).values({ chatId, url, created: Date.now() })
     .onConflictDoUpdate({ target: pending.chatId, set: { url, created: Date.now() } }).run();
-  await api.sendMessage({ chat_id: chatId, text: `🎬 ${url}\nچه کیفیتی دانلود کنم؟`,
-    reply_markup: { inline_keyboard: FORMATS.map(([k, label]) => [{ text: label, callback_data: `dl:${k}` }]) } });
+  await api.sendMessage({ chat_id: chatId, text: t(lang, 'quality_question', { url }),
+    reply_markup: { inline_keyboard: FORMATS.map((k) => [{ text: fmtLabel(lang, k), callback_data: `dl:${k}` }]) } });
 }
