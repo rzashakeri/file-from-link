@@ -22,6 +22,15 @@ services:
   pot-provider:
     image: brainicism/bgutil-ytdlp-pot-provider:latest
     restart: unless-stopped
+  cobalt:
+    # Self-hosted imputnet/cobalt (v11) for the bot's Cobalt-first routing.
+    # No ports published: reachable only inside the compose network at
+    # http://cobalt:9000, so auth-off is safe (workers are the only clients).
+    image: ghcr.io/imputnet/cobalt:11
+    restart: unless-stopped
+    environment:
+      API_URL: "http://cobalt:9000"
+      API_AUTH_REQUIRED: "0"
   worker:
     build: .
     command: ["python","-m","app.worker"]
