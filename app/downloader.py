@@ -11,6 +11,7 @@ from pathlib import Path
 import shutil
 import yt_dlp
 from .config import DOWNLOAD_DIR, COOKIES_FILE, IG_COOKIES_FILE, X_COOKIES_FILE, JOB_TIMEOUT, POT_BASE_URL, PROXY, MAX_FILE_BYTES
+from . import cobalt as _cobalt
 from .utils import format_selector, is_spotify, is_apple_music
 class DownloadError(Exception): pass
 BOT_WALL_MARKERS = ("not a bot", "sign in to confirm", "po token", "potoken", "needs to be reloaded", "requested format is not available")
@@ -187,6 +188,15 @@ def _ig_api_download(url: str, choice: str, job_id: str, on_progress=None):
 
 def download(url: str, choice: str, job_id: str, on_progress=None) -> tuple[Path, dict]:
     Path(DOWNLOAD_DIR / job_id).mkdir(parents=True, exist_ok=True)
+    # Hybrid routing: Cobalt-covered services try the Cobalt intermediary
+    # first (no burner session needed -- this is what fixes Instagram while
+    # its session is dead). Any Cobalt failure falls through to the
+    # existing IG-API / yt-dlp paths below.
+    if _cobalt.cobalt_supported(url):
+        try:
+            return _cobalt.cobalt_download(url, choice, job_id, on_progress)
+        except _cobalt.CobaltError:
+            pass
     # Stories: yt-dlp's story extractor is broken against current Instagram
     # (its video-info sub-request fails with HTTP 400 even with a valid
     # session). Story URLs carry the numeric media id — go straight to the API.
