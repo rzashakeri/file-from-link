@@ -20,5 +20,7 @@ MAX_FILE_BYTES = int(os.environ.get("MAX_FILE_BYTES", str(1024*1024*1024)))  # 1
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))  # only this Telegram user may use /stats
 POT_BASE_URL = os.environ.get("POT_BASE_URL", "http://pot-provider:4416")
 PROXY = os.environ.get("YTDLP_PROXY", "")
+COBALT_API_URL = os.environ.get("COBALT_API_URL", "https://api.cobalt.tools")
+COBALT_API_KEY = os.environ.get("COBALT_API_KEY", "")
 for d in (DOWNLOAD_DIR, PUBLIC_DIR): d.mkdir(parents=True, exist_ok=True)
 DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
