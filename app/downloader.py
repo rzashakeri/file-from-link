@@ -229,6 +229,13 @@ def download(url: str, choice: str, job_id: str, on_progress=None) -> tuple[Path
         if "instagram.com" in url and any(s in url for s in ("/p/", "/reel/", "/reels/", "/tv/")):
             try: return _ig_api_download(url, choice, job_id, on_progress)
             except DownloadError: pass
+        if "youtu" in url:
+            # YouTube fallback (reverse order vs other services): yt-dlp
+            # stays first (subtitles/description/tiers); our own Cobalt is
+            # a second chance for muxed/audio formats only -- merge jobs
+            # raise CobaltError and we keep the original yt-dlp error.
+            try: return _cobalt.cobalt_download(url, choice, job_id, on_progress)
+            except _cobalt.CobaltError: pass
         raise
 
 def _download_ytdlp(url: str, choice: str, job_id: str, on_progress=None) -> tuple[Path, dict]:
