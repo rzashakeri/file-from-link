@@ -14,6 +14,7 @@ from .utils import extract_urls, FORMAT_ORDER, ig_profile_username, is_ig_story,
 from .queue import enqueue, QueueFull, enqueue_broadcast
 from . import db
 from .i18n import LANGUAGES, t, fmt_label
+from .position_updates import position_loop
 from .downloader import list_qualities, list_qualities_generic
 from .ig import fetch_profile_pic
 logging.basicConfig(level=logging.INFO)
@@ -318,6 +319,7 @@ async def _heartbeat_loop():
         await asyncio.sleep(60)
 async def _post_init(app):
     asyncio.create_task(_heartbeat_loop())
+    asyncio.create_task(position_loop(app.bot))
 def main():
     # Hardened polling: the 2026-10-22 stall was a silently hung long-poll
     # (container Up, zero errors, no updates for 40+ min). Explicit HTTP
