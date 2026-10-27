@@ -1,14 +1,18 @@
 """Deliver a finished file to a Telegram chat.
-<=49MB: direct sendVideo/sendDocument. >49MB: S3 presigned link if configured,
-otherwise a public link served by app.api (/files/<token>/<name>, TTL-bound)."""
+<=TELEGRAM_LIMIT: direct sendVideo/sendDocument (49MB on the cloud API,
+2000MB via a local Bot API server). Above it: S3 presigned link if
+configured, otherwise a public link served by app.api
+(/files/<token>/<name>, TTL-bound)."""
 import json, secrets, shutil, subprocess, time, urllib.parse
 from pathlib import Path
 import httpx
-from .config import BOT_TOKEN, TELEGRAM_LIMIT, PUBLIC_DIR, PUBLIC_BASE_URL, S3_BUCKET, AWS_REGION, FILE_TTL_HOURS
+from .config import BOT_TOKEN, TELEGRAM_LIMIT, PUBLIC_DIR, PUBLIC_BASE_URL, S3_BUCKET, AWS_REGION, FILE_TTL_HOURS, BOT_API_BASE_URL
 from .i18n import t as tr
-API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+API = f"{BOT_API_BASE_URL or 'https://api.telegram.org/bot'}{BOT_TOKEN}"
+FILE_SEND_TIMEOUT = 1800  # a 1GB upload to Telegram DCs takes minutes
 def tg(method, **kw):
-    with httpx.Client(timeout=600) as c:
+    timeout = kw.pop("timeout", 600)
+    with httpx.Client(timeout=timeout) as c:
         r = c.post(f"{API}/{method}", data={k:v for k,v in kw.items() if not isinstance(v, tuple)},
                    files={k:v for k,v in kw.items() if isinstance(v, tuple)})
         r.raise_for_status(); return r.json()
@@ -50,7 +54,7 @@ def deliver(chat_id, path: Path, title: str, lang: str = 'en', direct_url: str |
         if extra: extra["supports_streaming"] = True
         caption = f"{title or path.name}\n{footer}"[:1000]
         with path.open("rb") as f:
-            tg(method, chat_id=chat_id, caption=caption, **extra, **{field:(path.name, f)})
+            tg(method, chat_id=chat_id, caption=caption, timeout=FILE_SEND_TIMEOUT, **extra, **{field:(path.name, f)})
         return "file"
     if S3_BUCKET:
         import boto3
