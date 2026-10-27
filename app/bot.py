@@ -9,7 +9,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 import json as _json
 from telegram.request import HTTPXRequest
 import time as _time
-from .config import BOT_TOKEN, OWNER_ID, PUBLIC_DIR
+from .config import BOT_TOKEN, OWNER_ID, PUBLIC_DIR, BOT_API_BASE_URL
 from .utils import extract_urls, FORMAT_ORDER, ig_profile_username, is_ig_story, is_spotify, is_apple_music
 from .queue import enqueue, QueueFull, enqueue_broadcast
 from . import db
@@ -323,15 +323,22 @@ def main():
     # (container Up, zero errors, no updates for 40+ min). Explicit HTTP
     # timeouts make a half-open connection RAISE instead of hanging, and
     # bootstrap_retries=-1 makes the updater retry forever on its own.
-    req = HTTPXRequest(connect_timeout=10, read_timeout=30, write_timeout=30, pool_timeout=10)
+    # Local Bot API server: route PTB through it too (polling + messages)
+    # and give writes room for large sends; unset = cloud defaults.
+    write_timeout = 1800 if BOT_API_BASE_URL else 30
+    req = HTTPXRequest(connect_timeout=10, read_timeout=30, write_timeout=write_timeout, pool_timeout=10)
     gu_req = HTTPXRequest(connect_timeout=10, read_timeout=45, write_timeout=30, pool_timeout=10)
     # concurrent_updates is THE fix for the promo-day freezes: PTB processes
     # updates SEQUENTIALLY by default, so one user's 30-90s quality probe
     # queued every other user's reply behind it (~1 min freeze, then a burst).
     # With concurrency on, each update runs in its own task and the ack goes
     # out immediately; heavy work stays in the workers regardless.
-    app = (Application.builder().token(BOT_TOKEN).concurrent_updates(True)
-           .request(req).get_updates_request(gu_req).post_init(_post_init).build())
+    builder = Application.builder().token(BOT_TOKEN).concurrent_updates(True).request(req)
+    if BOT_API_BASE_URL:
+        base_file = (BOT_API_BASE_URL[:-len("/bot")] + "/file/bot" if BOT_API_BASE_URL.endswith("/bot")
+                     else BOT_API_BASE_URL + "/file/bot")
+        builder = builder.base_url(BOT_API_BASE_URL).base_file_url(base_file)
+    app = builder.get_updates_request(gu_req).post_init(_post_init).build()
     app.add_error_handler(_error_handler)
     app.add_handler(CommandHandler("start", start)); app.add_handler(CommandHandler("help", start))
     app.add_handler(CommandHandler("language", language_cmd))
