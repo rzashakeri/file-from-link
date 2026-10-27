@@ -7,9 +7,17 @@ REDIS_URL = os.environ.get("REDIS_URL","redis://localhost:6379/0")
 DATABASE_PATH = Path(os.environ.get("DATABASE_PATH","./jobs.db"))
 DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR","./downloads"))
 PUBLIC_DIR = Path(os.environ.get("PUBLIC_DIR","./public"))
-TELEGRAM_LIMIT = int(os.environ.get("TELEGRAM_UPLOAD_LIMIT_MB","49"))*1024*1024
+BOT_API_BASE_URL = os.environ.get("BOT_API_BASE_URL", "").rstrip("/")
+# Local Bot API server (telegram-bot-api --local) raises the bot send
+# limit to 2000MB; the cloud API caps at 50MB. The default threshold
+# follows the configured endpoint; TELEGRAM_UPLOAD_LIMIT_MB still
+# overrides either way. Empty BOT_API_BASE_URL = cloud default.
+TELEGRAM_LIMIT = int(os.environ.get("TELEGRAM_UPLOAD_LIMIT_MB", "2000" if BOT_API_BASE_URL else "49"))*1024*1024
 MAX_JOBS_PER_USER = int(os.environ.get("MAX_JOBS_PER_USER","3"))
-JOB_TIMEOUT = int(os.environ.get("JOB_TIMEOUT_SECONDS","1200"))
+# 1200 -> 1800: with a local Bot API server the send step alone may take
+# minutes for a 1GB file (upload to Telegram DCs), so the job envelope
+# grows to match. Still env-overridable via JOB_TIMEOUT_SECONDS.
+JOB_TIMEOUT = int(os.environ.get("JOB_TIMEOUT_SECONDS","1800"))
 FILE_TTL_HOURS = int(os.environ.get("FILE_TTL_HOURS","24"))
 S3_BUCKET = os.environ.get("S3_BUCKET","")
 AWS_REGION = os.environ.get("AWS_REGION","eu-central-1")
