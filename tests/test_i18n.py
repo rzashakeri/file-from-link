@@ -4,7 +4,7 @@ os.environ.setdefault("BOT_TOKEN", "dummy")
 from app.i18n import LANGUAGES, STRINGS, t, fmt_label
 from app.utils import FORMAT_ORDER
 def test_same_keys_all_languages():
-    assert list(LANGUAGES) == ["en", "fa", "ru", "ar"]
+    assert list(LANGUAGES) == ["en", "fa", "ru", "ar", "zh"]
     assert set(STRINGS) == set(LANGUAGES)
     keys = set(STRINGS["en"].keys())
     for lang, d in STRINGS.items(): assert set(d.keys()) == keys, lang
