@@ -31,6 +31,29 @@ services:
     environment:
       API_URL: "http://cobalt:9000"
       API_AUTH_REQUIRED: "0"
+  bot-api:
+    # Local Telegram Bot API server (aiogram/telegram-bot-api:10.3).
+    # Profile-gated: a plain `docker compose up -d --build` never starts
+    # it, so normal deploys stay safe until TELEGRAM_API_ID/HASH exist.
+    # Start it with: docker compose --profile local-api up -d bot-api
+    # (then restart bot/workers with BOT_API_BASE_URL=http://bot-api:8081/bot).
+    # No published ports: reachable only inside the compose network at
+    # http://bot-api:8081, like cobalt. TELEGRAM_LOCAL=1 is what lifts
+    # the bot send limit to 2000MB (--local mode); without it the server
+    # still enforces the 50MB cloud limit. No depends_on from bot/workers:
+    # a profiled dependency would break plain deploys; start bot-api
+    # BEFORE restarting bot/workers (see deploy order in the checklist).
+    image: aiogram/telegram-bot-api:10.3
+    profiles: ["local-api"]
+    restart: unless-stopped
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
+      TELEGRAM_LOCAL: "1"
+      TELEGRAM_HTTP_IP_ADDRESS: "0.0.0.0"
+      TELEGRAM_WORK_DIR: /var/lib/telegram-bot-api
+      TELEGRAM_TEMP_DIR: /tmp/telegram-bot-api
+    volumes: [bot-api-data:/var/lib/telegram-bot-api]
   worker:
     build: .
     command: ["python","-m","app.worker"]
@@ -42,3 +65,4 @@ services:
 volumes:
   redis-data:
   shared-data:
+  bot-api-data:
