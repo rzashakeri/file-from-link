@@ -1,4 +1,4 @@
-"""UI strings in English, Persian, Russian and Arabic. The user picks a language
+"""UI strings in English, Persian, Russian, Arabic and Chinese. The user picks a language
 once via inline buttons; it is stored in the DB and every bot/worker message
 uses it. Add a language by copying a dict — keys must stay identical across
 languages."""
@@ -7,11 +7,12 @@ LANGUAGES = {
     "fa": "🇮🇷 فارسی",
     "ru": "🇷🇺 Русский",
     "ar": "🇸🇦 العربية",
+    "zh": "🇨🇳 中文",
 }
 DEFAULT_LANG = "en"
 STRINGS = {
   "en": {
-    "choose_language": "🌐 Choose your language:\nEnglish · فارسی · Русский · العربية",
+    "choose_language": "🌐 Choose your language:\nEnglish · فارسی · Русский · العربية · 中文",
     "language_button": "🌐 Language",
     "welcome": "📥 File From Link — send a link, get a file!\nSend me a video link (YouTube, Instagram, TikTok, X and 1,700+ sites), pick a quality, and the file lands right here. When it is busy, jobs wait in a fair queue.",
     "no_url": "I could not find a link in that message. Send a full URL.",
@@ -49,7 +50,7 @@ STRINGS = {
     "description": "📝 Description",
   },
   "fa": {
-    "choose_language": "🌐 زبان خود را انتخاب کنید:\nEnglish · فارسی · Русский · العربية",
+    "choose_language": "🌐 زبان خود را انتخاب کنید:\nEnglish · فارسی · Русский · العربية · 中文",
     "language_button": "🌐 زبان",
     "welcome": "📥 فایل از لینک — لینک بفرست، فایل بگیر!\nلینک ویدیو رو بفرست (یوتیوب، اینستاگرام، تیک‌تاک، X و ۱۷۰۰+ سایت)، کیفیت رو انتخاب کن و فایل رو همینجا تحویل بگیر. وقتی شلوغ باشه، کارها به نوبت توی صف می‌رن.",
     "no_url": "توی این پیام لینکی پیدا نکردم. یک URL کامل بفرست.",
@@ -87,7 +88,7 @@ STRINGS = {
     "description": "📝 توضیحات",
   },
   "ru": {
-    "choose_language": "🌐 Выберите язык:\nEnglish · فارسی · Русский · العربية",
+    "choose_language": "🌐 Выберите язык:\nEnglish · فارسی · Русский · العربية · 中文",
     "language_button": "🌐 Язык",
     "welcome": "📥 File From Link — отправьте ссылку, получите файл!\nПришлите ссылку на видео (YouTube, Instagram, TikTok, X и более 1700 сайтов), выберите качество — и файл придёт сюда. Если сервер занят, задачи ждут в очереди.",
     "no_url": "В этом сообщении нет ссылки. Отправьте полный URL.",
@@ -125,7 +126,7 @@ STRINGS = {
     "description": "📝 Описание",
   },
   "ar": {
-    "choose_language": "🌐 اختر لغتك:\nEnglish · فارسی · Русский · العربية",
+    "choose_language": "🌐 اختر لغتك:\nEnglish · فارسی · Русский · العربية · 中文",
     "language_button": "🌐 اللغة",
     "welcome": "📥 File From Link — أرسل رابطًا واحصل على ملف!\nأرسل رابط فيديو (YouTube وInstagram وTikTok وX وأكثر من 1700 موقع)، واختر الجودة، وسيصل الملف إلى هنا. وعند الازدحام تنتظر المهام في قائمة عادلة.",
     "no_url": "لم أجد رابطًا في هذه الرسالة. أرسل عنوان URL كاملًا.",
@@ -161,6 +162,44 @@ STRINGS = {
     "broadcast_done": "📣 انتهى البث.\n✅ أُرسلت: {ok}\n🚫 حجبوا البوت: {blocked}\n❌ فشلت: {failed}",
     "cancelled": "❌ أُلغي.",
     "description": "📝 الوصف",
+  },
+  "zh": {
+    "choose_language": "🌐 请选择您的语言：\nEnglish · فارسی · Русский · العربية · 中文",
+    "language_button": "🌐 语言",
+    "welcome": "📥 File From Link — 发送链接，即可获取文件！\n发送视频链接（YouTube、Instagram、TikTok、X 等 1700 多个网站），选择画质，文件就会直接发到这里。繁忙时，任务会按顺序排队。",
+    "no_url": "这条消息里没有找到链接。请发送完整的 URL。",
+    "quality_question": "🎬 {url}\n请选择下载画质：",
+    "fmt_best": "🎬 最佳画质", "fmt_720": "📺 720p", "fmt_480": "📺 480p", "fmt_audiohq": "🎵 MP3 · 320kbps（最佳音质）", "fmt_audio": "🎵 MP3 · 192kbps", "fmt_audiolow": "🗜️ MP3 · 48kbps（体积小，适合低带宽）",
+    "queued_adding": "⏳ 正在加入队列…",
+    "queued": "⏳ 您已进入队列 — 位置：{pos}\n任务 ID：{jid}",
+    "queue_full": "🚦 您的队列已满。请等待当前任务完成。",
+    "expired": "⏰ 该请求已过期 — 请重新发送链接。",
+    "downloading": "⬇️ 下载中… {pct}%",
+    "uploading": "⬆️ 正在发送到 Telegram…",
+    "done": "✅ 完成：{title}",
+    "failed": "❌ 下载失败：\n{error}",
+    "failed_generic": "❌ 下载时出现问题。请重试。",
+    "too_big": "📦 “{title}”超过了 Telegram 50MB 的机器人限制（{mb}MB）。\n下载链接（{hours}小时内有效）：\n{url}",
+    "language_set": "✅ 语言已设为中文。随时可以发送链接！",
+    "probing": "🔍 正在检查该视频实际提供的画质…",
+    "matching": "🔍 正在 YouTube 上查找这首歌…",
+    "fetching_pic": "🖼️ 正在获取头像…",
+    "pic_failed": "❌ 无法获取头像（账号为私密账号，或 Instagram 拒绝了请求）。",
+    "stats": "📊 机器人统计\n👥 总用户数：{users}\n⬇️ 总下载量：{jobs}（今天：{today}）\n✅ 成功：{done} · ❌ 失败：{failed}\n💾 磁盘上的公开文件：{storage}",
+    "direct_start": "⬇️ 收到！正在以最佳画质（HD）下载 — 无需选择。",
+    "direct_link": "🔗 来自源站的直链（几小时后过期，且可能无法在所有网络中打开）：\n{url}",
+    "footer": "📥 通过 @FileFromLinkBot 下载",
+    "admin_panel": "🛠 管理面板",
+    "btn_stats": "📊 统计数据", "btn_broadcast": "📣 向所有用户广播",
+    "btn_back": "🔙 返回", "btn_exit_admin": "🚪 退出管理面板", "admin_exited": "✅ 已退出管理面板。",
+    "broadcast_prompt": "📣 请发送要广播的消息（文字、图片、视频 — 任何内容）。它将原样复制给每位用户。",
+    "broadcast_confirm": "将这条消息发送给 {n} 位用户？",
+    "btn_send_all": "✅ 是，发送给所有人", "btn_cancel": "❌ 取消",
+    "broadcast_started": "📣 已开始向 {n} 位用户广播…",
+    "broadcast_progress": "📣 广播中… 已发送 {ok} · 已拉黑 {blocked} · 失败 {failed}（共 {n}）",
+    "broadcast_done": "📣 广播完成。\n✅ 已发送：{ok}\n🚫 拉黑机器人：{blocked}\n❌ 失败：{failed}",
+    "cancelled": "❌ 已取消。",
+    "description": "📝 简介",
   },
 }
 def t(lang: str, key: str, **kw) -> str:
