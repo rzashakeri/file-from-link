@@ -13,12 +13,15 @@ def init():
         cols = [r[1] for r in con.execute("PRAGMA table_info(jobs)")]
         if "lang" not in cols:
             con.execute("ALTER TABLE jobs ADD COLUMN lang TEXT DEFAULT 'en'")
+        if "status_message_id" not in cols:
+            con.execute("ALTER TABLE jobs ADD COLUMN status_message_id INTEGER")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created)")
 init()
-def create_job(chat_id, user_id, url, fmt, lang="en"):
+def create_job(chat_id, user_id, url, fmt, lang="en", status_message_id=None):
     jid = uuid.uuid4().hex[:12]; now = time.time()
     with _c() as con:
-        con.execute("INSERT INTO jobs (id,chat_id,user_id,url,fmt,status,created,updated,lang) VALUES (?,?,?,?,?,'queued',?,?,?)",
-                    (jid, chat_id, user_id, url, fmt, now, now, lang))
+        con.execute("INSERT INTO jobs (id,chat_id,user_id,url,fmt,status,created,updated,lang,status_message_id) VALUES (?,?,?,?,?,'queued',?,?,?,?)",
+                    (jid, chat_id, user_id, url, fmt, now, now, lang, status_message_id))
     return jid
 def get_lang(user_id):
     with _c() as con:
@@ -46,6 +49,11 @@ def queue_position(jid):
         r = con.execute("SELECT created FROM jobs WHERE id=?", (jid,)).fetchone()
         if not r: return None
         return con.execute("SELECT COUNT(*) c FROM jobs WHERE status='queued' AND created<=?", (r["created"],)).fetchone()["c"]
+def queued_jobs_with_status_msg():
+    """Jobs still waiting whose queue message can be live-updated."""
+    with _c() as con:
+        rows = con.execute("SELECT id, chat_id, lang, status_message_id FROM jobs WHERE status='queued' AND status_message_id IS NOT NULL").fetchall()
+    return [dict(r) for r in rows]
 def stale_active_jobs(max_age_seconds):
     """Jobs stuck in downloading/uploading whose last update is older than max_age."""
     cutoff = time.time() - max_age_seconds
