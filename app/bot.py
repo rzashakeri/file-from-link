@@ -118,21 +118,6 @@ async def on_admin(u: Update, c: ContextTypes.DEFAULT_TYPE):
         n = len(db.all_user_ids())
         msg = await q.edit_message_text(t(lang, "broadcast_started", n=n))
         enqueue_broadcast(chat, st["from_chat"], st["message_id"], msg.message_id, lang)
-async def _broadcast_capture(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    """Group -1: while the owner is composing a broadcast, swallow their
-    next message as the broadcast content and ask for confirmation."""
-    if not _is_owner(u) or not u.effective_message: return
-    chat = u.effective_chat.id
-    st = BC_STATE.get(chat)
-    if not st or st.get("stage") != "await_msg": return
-    lang = lang_of(u) or "fa"
-    BC_STATE[chat] = {"stage": "await_confirm", "from_chat": chat, "message_id": u.effective_message.message_id}
-    n = len(db.all_user_ids())
-    markup = InlineKeyboardMarkup([[
-        InlineKeyboardButton(t(lang, "btn_send_all"), callback_data="adm:go"),
-        InlineKeyboardButton(t(lang, "btn_cancel"), callback_data="adm:cancel")]])
-    await u.effective_message.reply_text(t(lang, "broadcast_confirm", n=n), reply_markup=markup)
-    raise ApplicationHandlerStop
 ADMIN_STATE: dict[int, dict] = {}
 def _admin_kb(lang):
     return ReplyKeyboardMarkup([
@@ -156,8 +141,13 @@ async def _admin_stats_text(lang):
     storage = f"{total/1073741824:.1f} GB" if total >= 1073741824 else f"{total//1048576} MB"
     return t(lang, "stats", storage=storage, **s)
 async def _admin_keyboard(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    """Group -1: reply-keyboard admin panel (non-inline buttons).
-    Only active while the owner is inside the admin panel; any other
+    """Group -1: the ONLY group -1 handler (2026-10-27 bug: two group -1
+    handlers meant the first one's filters matched every non-command
+    message, so this one never ran and admin button taps fell through
+    to on_message's no_url reply). It serves both admin flows:
+    (a) the legacy inline broadcast capture (BC_STATE), and
+    (b) the reply-keyboard admin panel (ADMIN_STATE).
+    Only active while the owner is inside an admin flow; any other
     message falls through to the normal handlers, so the owner can
     still use the bot while the keyboard is up. Back buttons abandon
     the current step and return to the admin menu; Exit removes the
@@ -165,10 +155,28 @@ async def _admin_keyboard(u: Update, c: ContextTypes.DEFAULT_TYPE):
     working for messages sent before this change."""
     if not _is_owner(u) or not u.effective_message: return
     chat = u.effective_chat.id
-    st = ADMIN_STATE.get(chat)
-    if not st: return
     lang = lang_of(u) or "fa"
     text = u.effective_message.text or ""
+    # (a) Legacy inline broadcast capture.
+    bcs = BC_STATE.get(chat)
+    if bcs and bcs.get("stage") == "await_msg":
+        BC_STATE[chat] = {"stage": "await_confirm", "from_chat": chat, "message_id": u.effective_message.message_id}
+        n = len(db.all_user_ids())
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton(t(lang, "btn_send_all"), callback_data="adm:go"),
+            InlineKeyboardButton(t(lang, "btn_cancel"), callback_data="adm:cancel")]])
+        await u.effective_message.reply_text(t(lang, "broadcast_confirm", n=n), reply_markup=markup)
+        raise ApplicationHandlerStop
+    # (b) Reply-keyboard panel. If the keyboard outlived a bot restart
+    # (keyboards persist client-side, ADMIN_STATE does not), an admin
+    # button tap re-enters the menu instead of falling through.
+    st = ADMIN_STATE.get(chat)
+    if not st:
+        if text in (t(lang, "btn_stats"), t(lang, "btn_broadcast"), t(lang, "btn_exit_admin")):
+            ADMIN_STATE[chat] = {"stage": "menu"}
+            st = ADMIN_STATE[chat]
+        else:
+            return
     stage = st.get("stage")
     if stage == "menu":
         if text == t(lang, "btn_stats"):
@@ -330,7 +338,6 @@ def main():
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CallbackQueryHandler(on_admin, pattern=r"^adm:"))
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, _broadcast_capture), group=-1)
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, _admin_keyboard), group=-1)
     app.add_handler(CallbackQueryHandler(on_lang_pick, pattern=r"^lang:"))
     app.add_handler(CallbackQueryHandler(on_lang_menu, pattern=r"^langmenu$"))
