@@ -4,7 +4,7 @@ Language flow: a new user first picks a language with inline glass buttons
 after that — welcome, quality picker, queue position, progress, delivery —
 uses it. Change it anytime with /language."""
 import asyncio, io, logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters, TypeHandler, ApplicationHandlerStop
 import json as _json
 from telegram.request import HTTPXRequest
@@ -91,7 +91,8 @@ def _is_owner(u: Update) -> bool:
 async def admin_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
     if not _is_owner(u): return
     lang = lang_of(u) or "fa"
-    await u.message.reply_text(t(lang, "admin_panel"), reply_markup=_admin_markup(lang))
+    ADMIN_STATE[u.effective_chat.id] = {"stage": "menu"}
+    await u.message.reply_text(t(lang, "admin_panel"), reply_markup=_admin_kb(lang))
 async def on_admin(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     if not _is_owner(u): return
@@ -99,17 +100,7 @@ async def on_admin(u: Update, c: ContextTypes.DEFAULT_TYPE):
     chat = u.effective_chat.id
     action = q.data.split(":", 1)[1]
     if action == "stats":
-        s = db.stats()
-        total = 0
-        try:
-            for r, _dirs, files in __import__("os").walk(PUBLIC_DIR):
-                for f in files:
-                    try: total += __import__("os").path.getsize(__import__("os").path.join(r, f))
-                    except OSError: pass
-        except Exception:
-            pass
-        storage = f"{total/1073741824:.1f} GB" if total >= 1073741824 else f"{total//1048576} MB"
-        await q.edit_message_text(t(lang, "stats", storage=storage, **s), reply_markup=_admin_markup(lang))
+        await q.edit_message_text(await _admin_stats_text(lang), reply_markup=_admin_markup(lang))
     elif action == "menu":
         BC_STATE.pop(chat, None)
         await q.edit_message_text(t(lang, "admin_panel"), reply_markup=_admin_markup(lang))
@@ -142,6 +133,83 @@ async def _broadcast_capture(u: Update, c: ContextTypes.DEFAULT_TYPE):
         InlineKeyboardButton(t(lang, "btn_cancel"), callback_data="adm:cancel")]])
     await u.effective_message.reply_text(t(lang, "broadcast_confirm", n=n), reply_markup=markup)
     raise ApplicationHandlerStop
+ADMIN_STATE: dict[int, dict] = {}
+def _admin_kb(lang):
+    return ReplyKeyboardMarkup([
+        [t(lang, "btn_stats")],
+        [t(lang, "btn_broadcast")],
+        [t(lang, "btn_exit_admin")]], resize_keyboard=True)
+def _admin_back_kb(lang):
+    return ReplyKeyboardMarkup([[t(lang, "btn_back")]], resize_keyboard=True)
+def _admin_confirm_kb(lang):
+    return ReplyKeyboardMarkup([[t(lang, "btn_send_all")], [t(lang, "btn_back")]], resize_keyboard=True)
+async def _admin_stats_text(lang):
+    s = db.stats()
+    total = 0
+    try:
+        for r, _dirs, files in __import__("os").walk(PUBLIC_DIR):
+            for f in files:
+                try: total += __import__("os").path.getsize(__import__("os").path.join(r, f))
+                except OSError: pass
+    except Exception:
+        pass
+    storage = f"{total/1073741824:.1f} GB" if total >= 1073741824 else f"{total//1048576} MB"
+    return t(lang, "stats", storage=storage, **s)
+async def _admin_keyboard(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    """Group -1: reply-keyboard admin panel (non-inline buttons).
+    Only active while the owner is inside the admin panel; any other
+    message falls through to the normal handlers, so the owner can
+    still use the bot while the keyboard is up. Back buttons abandon
+    the current step and return to the admin menu; Exit removes the
+    keyboard entirely. The old inline admin callbacks above keep
+    working for messages sent before this change."""
+    if not _is_owner(u) or not u.effective_message: return
+    chat = u.effective_chat.id
+    st = ADMIN_STATE.get(chat)
+    if not st: return
+    lang = lang_of(u) or "fa"
+    text = u.effective_message.text or ""
+    stage = st.get("stage")
+    if stage == "menu":
+        if text == t(lang, "btn_stats"):
+            await u.effective_message.reply_text(await _admin_stats_text(lang), reply_markup=_admin_kb(lang))
+            raise ApplicationHandlerStop
+        if text == t(lang, "btn_broadcast"):
+            ADMIN_STATE[chat] = {"stage": "await_msg"}
+            await u.effective_message.reply_text(t(lang, "broadcast_prompt"), reply_markup=_admin_back_kb(lang))
+            raise ApplicationHandlerStop
+        if text == t(lang, "btn_exit_admin"):
+            ADMIN_STATE.pop(chat, None)
+            await u.effective_message.reply_text(t(lang, "admin_exited"), reply_markup=ReplyKeyboardRemove())
+            raise ApplicationHandlerStop
+        return
+    if stage == "await_msg":
+        if text == t(lang, "btn_back"):
+            ADMIN_STATE[chat] = {"stage": "menu"}
+            await u.effective_message.reply_text(t(lang, "admin_panel"), reply_markup=_admin_kb(lang))
+            raise ApplicationHandlerStop
+        ADMIN_STATE[chat] = {"stage": "await_confirm", "from_chat": chat, "message_id": u.effective_message.message_id}
+        n = len(db.all_user_ids())
+        await u.effective_message.reply_text(t(lang, "broadcast_confirm", n=n), reply_markup=_admin_confirm_kb(lang))
+        raise ApplicationHandlerStop
+    if stage == "await_confirm":
+        if text == t(lang, "btn_send_all"):
+            st = ADMIN_STATE.pop(chat, None)
+            if not st or "message_id" not in st:
+                ADMIN_STATE[chat] = {"stage": "menu"}
+                await u.effective_message.reply_text(t(lang, "expired"), reply_markup=_admin_kb(lang))
+                raise ApplicationHandlerStop
+            n = len(db.all_user_ids())
+            msg = await u.effective_message.reply_text(t(lang, "broadcast_started", n=n), reply_markup=_admin_kb(lang))
+            ADMIN_STATE[chat] = {"stage": "menu"}
+            enqueue_broadcast(chat, st["from_chat"], st["message_id"], msg.message_id, lang)
+            raise ApplicationHandlerStop
+        if text == t(lang, "btn_back"):
+            ADMIN_STATE[chat] = {"stage": "menu"}
+            await u.effective_message.reply_text(t(lang, "admin_panel"), reply_markup=_admin_kb(lang))
+            raise ApplicationHandlerStop
+        await u.effective_message.reply_text(t(lang, "broadcast_confirm", n=len(db.all_user_ids())), reply_markup=_admin_confirm_kb(lang))
+        raise ApplicationHandlerStop
 async def stats_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
     if not OWNER_ID or u.effective_user.id != OWNER_ID:
         return  # owner-only: silent for everyone else
@@ -263,6 +331,7 @@ def main():
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CallbackQueryHandler(on_admin, pattern=r"^adm:"))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, _broadcast_capture), group=-1)
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, _admin_keyboard), group=-1)
     app.add_handler(CallbackQueryHandler(on_lang_pick, pattern=r"^lang:"))
     app.add_handler(CallbackQueryHandler(on_lang_menu, pattern=r"^langmenu$"))
     app.add_handler(CallbackQueryHandler(on_pick, pattern=r"^dl:"))
