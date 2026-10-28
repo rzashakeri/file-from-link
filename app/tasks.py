@@ -45,7 +45,7 @@ def process_job(job_id: str, status_message_id: int | None = None):
             except Exception: pass
         if fmt != "gif": _deliver_extras(chat_id, job_id, meta, lang)
         db.update_job(job_id, status="done")
-        if status_message_id: edit_text(chat_id, status_message_id, tr(lang, "done", title=meta.get("title","")), reply_markup={"inline_keyboard": [[{"text": tr(lang, "settings_button"), "callback_data": "set:open"}]]})
+        if status_message_id: edit_text(chat_id, status_message_id, tr(lang, "done", title=meta.get("title","")), reply_markup={"inline_keyboard": [[{"text": tr(lang, "settings_button"), "callback_data": "set:open"}, {"text": tr(lang, "language_button"), "callback_data": "langmenu"}]]})
     except DownloadError as e:
         db.update_job(job_id, status="failed", error=str(e))
         send_text(chat_id, tr(lang, "failed", error=str(e)))
