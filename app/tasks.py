@@ -1,13 +1,15 @@
+import logging
 import shutil
 from pathlib import Path
 from . import db
 from .downloader import download, DownloadError, get_direct_url, resolve_stream_match
 from .sender import deliver, send_text, edit_text, send_document_file, copy_message, send_animation
-from .gif import to_animation
+from .gif import to_animation, to_gif, probe_video, CONVERT_MAX_SECONDS
 from .config import DOWNLOAD_DIR, TELEGRAM_LIMIT, JOB_TIMEOUT
 from .i18n import t as tr
 from .utils import is_spotify, is_apple_music
 from .cleanup import sweep_public
+log = logging.getLogger(__name__)
 def process_job(job_id: str, status_message_id: int | None = None):
     sweep_public()
     job = db.get_job(job_id)
@@ -29,10 +31,12 @@ def process_job(job_id: str, status_message_id: int | None = None):
         path, meta = download(url, fmt, job_id, prog)
         if fmt == "gif":
             try: path = to_animation(path, job_id)
-            except Exception: pass  # fall back to the original video
+            except Exception: log.exception("gif animation conversion failed for job %s", job_id)  # fall back to the original video
+        elif fmt == "togif":
+            path = to_gif(path, job_id)  # no fallback: a failed conversion must fail the job, not silently deliver a video
         db.update_job(job_id, status="uploading", title=meta.get("title",""), filepath=str(path), filesize=path.stat().st_size)
         if status_message_id: edit_text(chat_id, status_message_id, tr(lang, "uploading"))
-        if fmt == "gif" and path.suffix.lower() == ".mp4" and path.stat().st_size <= TELEGRAM_LIMIT:
+        if fmt in ("gif", "togif") and path.suffix.lower() in (".mp4", ".gif") and path.stat().st_size <= TELEGRAM_LIMIT:
             send_animation(chat_id, path, f"{meta.get('title','')}\n{tr(lang, 'footer')}"[:1000])
         else:
             direct = None
@@ -43,9 +47,14 @@ def process_job(job_id: str, status_message_id: int | None = None):
         for extra in (meta.get("files") or [])[1:]:
             try: deliver(chat_id, Path(extra), "", lang, None)
             except Exception: pass
-        if fmt != "gif": _deliver_extras(chat_id, job_id, meta, lang)
+        if fmt not in ("gif", "togif"): _deliver_extras(chat_id, job_id, meta, lang)
         db.update_job(job_id, status="done")
-        if status_message_id: edit_text(chat_id, status_message_id, tr(lang, "done", title=meta.get("title","")), reply_markup={"inline_keyboard": [[{"text": tr(lang, "settings_button"), "callback_data": "set:open"}, {"text": tr(lang, "language_button"), "callback_data": "langmenu"}]]})
+        buttons = [[{"text": tr(lang, "settings_button"), "callback_data": "set:open"}, {"text": tr(lang, "language_button"), "callback_data": "langmenu"}]]
+        if fmt != "togif" and path.stat().st_size <= TELEGRAM_LIMIT:
+            has_video, dur = probe_video(path)
+            if has_video and dur is not None and dur < CONVERT_MAX_SECONDS:
+                buttons.append([{"text": tr(lang, "convert_to_gif"), "callback_data": f"togif:{job_id}"}])
+        if status_message_id: edit_text(chat_id, status_message_id, tr(lang, "done", title=meta.get("title","")), reply_markup={"inline_keyboard": buttons})
     except DownloadError as e:
         db.update_job(job_id, status="failed", error=str(e))
         send_text(chat_id, tr(lang, "failed", error=str(e)))
