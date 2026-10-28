@@ -54,6 +54,7 @@ STRINGS = {
     "settings_saved": "✅ Default quality saved: {fmt}",
     "settings_cleared": "✅ Default cleared — I will ask you every time.",
     "settings_button": "⚙️ Download settings",
+    "convert_to_gif": "🎞 Convert to GIF",
     "settings_clear": "❌ No default (ask every time)",
   },
   "fa": {
@@ -99,6 +100,7 @@ STRINGS = {
     "settings_saved": "✅ کیفیت پیش‌فرض ذخیره شد: {fmt}",
     "settings_cleared": "✅ پیش‌فرض پاک شد — هر بار ازت می‌پرسم.",
     "settings_button": "⚙️ تنظیمات دانلود",
+    "convert_to_gif": "🎞 تبدیل به گیف",
     "settings_clear": "❌ بدون پیش‌فرض (هر بار بپرس)",
   },
   "ru": {
@@ -144,6 +146,7 @@ STRINGS = {
     "settings_saved": "✅ Качество по умолчанию сохранено: {fmt}",
     "settings_cleared": "✅ Настройка по умолчанию сброшена — буду спрашивать каждый раз.",
     "settings_button": "⚙️ Настройки загрузки",
+    "convert_to_gif": "🎞 Конвертировать в GIF",
     "settings_clear": "❌ Без значения по умолчанию (спрашивать каждый раз)",
   },
   "ar": {
@@ -189,6 +192,7 @@ STRINGS = {
     "settings_saved": "✅ تم حفظ الجودة الافتراضية: {fmt}",
     "settings_cleared": "✅ تم مسح الافتراضي — سأسألك في كل مرة.",
     "settings_button": "⚙️ إعدادات التنزيل",
+    "convert_to_gif": "🎞 تحويل إلى GIF",
     "settings_clear": "❌ بدون افتراضي (اسأل في كل مرة)",
   },
   "zh": {
@@ -234,6 +238,7 @@ STRINGS = {
     "settings_saved": "✅ 已保存默认画质：{fmt}",
     "settings_cleared": "✅ 已清除默认选项 — 每次都会询问您。",
     "settings_button": "⚙️ 下载设置",
+    "convert_to_gif": "🎞 转换为 GIF",
     "settings_clear": "❌ 不设默认（每次询问）",
   },
 }
