@@ -19,8 +19,10 @@ def tg(method, **kw):
 def send_text(chat_id, text, **kw): return tg("sendMessage", chat_id=chat_id, text=text, **kw)
 def copy_message(chat_id, from_chat_id, message_id):
     return tg("copyMessage", chat_id=chat_id, from_chat_id=from_chat_id, message_id=message_id)
-def edit_text(chat_id, message_id, text):
-    try: return tg("editMessageText", chat_id=chat_id, message_id=message_id, text=text)
+def edit_text(chat_id, message_id, text, reply_markup=None):
+    kw = {}
+    if reply_markup is not None: kw["reply_markup"] = json.dumps(reply_markup)
+    try: return tg("editMessageText", chat_id=chat_id, message_id=message_id, text=text, **kw)
     except Exception: return None
 def _probe_video(path: Path) -> dict:
     """Real width/height/duration via ffprobe — without these Telegram
@@ -41,6 +43,11 @@ def _probe_video(path: Path) -> dict:
 def send_document_file(chat_id, path: Path, caption: str = ""):
     with path.open("rb") as f:
         return tg("sendDocument", chat_id=chat_id, caption=caption[:1000], document=(path.name, f))
+def send_animation(chat_id, path: Path, caption: str = ""):
+    """Telegram-native GIF: a muted looping MP4 (sendAnimation)."""
+    extra = _probe_video(path)
+    with path.open("rb") as f:
+        return tg("sendAnimation", chat_id=chat_id, caption=caption[:1000], timeout=FILE_SEND_TIMEOUT, animation=(path.name, f), **extra)
 def deliver(chat_id, path: Path, title: str, lang: str = 'en', direct_url: str | None = None) -> str:
     size = path.stat().st_size
     footer = tr(lang, "footer")
