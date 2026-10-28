@@ -57,7 +57,7 @@ services:
   worker:
     build: .
     command: ["python","-m","app.worker"]
-    deploy: {replicas: 3}
+    deploy: {replicas: 6}
     env_file: .env
     volumes: [shared-data:/data]
     depends_on: [redis, pot-provider]
