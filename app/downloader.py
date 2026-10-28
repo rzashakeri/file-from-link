@@ -86,7 +86,7 @@ def _extract_once(url, choice, job_id, on_progress, player_client=None):
                            key=lambda p: p.stat().st_size, reverse=True)
             if not files: raise DownloadError("no output file")
             path = files[0]
-        if choice not in ("audiohq", "audio", "audiolow") and choice != "gif":
+        if choice not in ("audiohq", "audio", "audiolow", "gif", "togif"):
             _fetch_subtitles(url, job_id, player_client)
         subs = sorted((f for f in Path(DOWNLOAD_DIR / job_id).glob("*")
                        if f.suffix.lower() in (".srt", ".vtt") and f != path),
