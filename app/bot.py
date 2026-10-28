@@ -21,6 +21,8 @@ logging.basicConfig(level=logging.INFO)
 PENDING: dict[int, str] = {}
 def _is_youtube(url: str) -> bool:
     return "youtube.com" in url or "youtu.be" in url
+def _is_x(url: str) -> bool:
+    return "x.com" in url or "twitter.com" in url
 async def _enqueue_direct(q, chat_id, user_id, url, lang, fmt="best"):
     """Non-YouTube links skip the picker: straight to the download."""
     msg = await q.edit_message_text(t(lang, "direct_start"))
@@ -50,16 +52,19 @@ def lang_markup():
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton(label, callback_data=f"lang:{code}") for code, label in items[i:i + 2]]
          for i in range(0, len(items), 2)])
-def quality_markup(lang):
-    return InlineKeyboardMarkup([[InlineKeyboardButton(fmt_label(lang, k), callback_data=f"dl:{k}")]
-                                 for k in FORMAT_ORDER])
-def dynamic_markup(lang, qualities):
+def quality_markup(lang, show_gif=False):
+    rows = [[InlineKeyboardButton(fmt_label(lang, k), callback_data=f"dl:{k}")]
+            for k in FORMAT_ORDER]
+    if show_gif: rows.append([InlineKeyboardButton("🎞 GIF", callback_data="dl:gif")])
+    return InlineKeyboardMarkup(rows)
+def dynamic_markup(lang, qualities, show_gif=False):
     rows = []
     for q in qualities[:8]:
         label = f"📹 {q['height']}p" + (f" · ~{q['mb']:.0f} MB" if q.get("mb") else "")
         rows.append([InlineKeyboardButton(label, callback_data=f"dl:h{q['height']}")])
     for a in ("audiohq", "audio", "audiolow"):
         rows.append([InlineKeyboardButton(fmt_label(lang, a), callback_data=f"dl:{a}")])
+    if show_gif: rows.append([InlineKeyboardButton("🎞 GIF", callback_data="dl:gif")])
     return InlineKeyboardMarkup(rows)
 async def probe_markup(lang, url):
     """Buttons from the video's REAL formats; falls back to the static list.
@@ -71,7 +76,8 @@ async def probe_markup(lang, url):
         qualities = await asyncio.wait_for(asyncio.to_thread(probe, url), timeout=25)
     except Exception:
         qualities = []  # timeout or probe error -> static picker, never a hang
-    return dynamic_markup(lang, qualities) if qualities else quality_markup(lang)
+    show_gif = _is_x(url)
+    return dynamic_markup(lang, qualities, show_gif) if qualities else quality_markup(lang, show_gif)
 def lang_of(u: Update):
     return db.get_lang(u.effective_user.id)
 
@@ -236,6 +242,32 @@ async def stats_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
 async def language_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
     lang = lang_of(u) or "en"
     await u.message.reply_text(t(lang, "choose_language"), reply_markup=lang_markup())
+SETTINGS_CHOICES = ("best", "720", "480", "audio")
+def _settings_markup(lang):
+    rows = [[InlineKeyboardButton(fmt_label(lang, k), callback_data=f"set:{k}") for k in ("best", "720")],
+            [InlineKeyboardButton(fmt_label(lang, k), callback_data=f"set:{k}") for k in ("480", "audio")],
+            [InlineKeyboardButton(t(lang, "settings_clear"), callback_data="set:clear")]]
+    return InlineKeyboardMarkup(rows)
+def _settings_text(lang, current):
+    if current:
+        return t(lang, "settings_title") + "\n" + t(lang, "settings_current", fmt=fmt_label(lang, current))
+    return t(lang, "settings_title") + "\n" + t(lang, "settings_none")
+async def settings_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    lang = lang_of(u) or "en"
+    await u.message.reply_text(_settings_text(lang, db.get_default_fmt(u.effective_user.id)), reply_markup=_settings_markup(lang))
+async def on_settings(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    q = u.callback_query; await q.answer()
+    lang = lang_of(u) or "en"
+    action = q.data.split(":", 1)[1]
+    if action == "open":
+        await q.edit_message_text(_settings_text(lang, db.get_default_fmt(u.effective_user.id)), reply_markup=_settings_markup(lang))
+    elif action == "clear":
+        db.set_default_fmt(u.effective_user.id, None)
+        await q.edit_message_text(t(lang, "settings_cleared"))
+    else:
+        if action not in SETTINGS_CHOICES: action = "best"
+        db.set_default_fmt(u.effective_user.id, action)
+        await q.edit_message_text(t(lang, "settings_saved", fmt=fmt_label(lang, action)))
 async def on_lang_menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     lang = lang_of(u) or "en"
@@ -247,10 +279,19 @@ async def on_lang_pick(u: Update, c: ContextTypes.DEFAULT_TYPE):
     db.set_lang(u.effective_user.id, lang)
     url = PENDING.pop(u.effective_chat.id, None)
     if url and not is_spotify(url) and not is_apple_music(url) and not ig_profile_username(url) and not is_ig_story(url):
-        PENDING[u.effective_chat.id] = url
-        await q.edit_message_text(t(lang, "probing"))
-        markup = await probe_markup(lang, url)
-        await q.edit_message_text(t(lang, "quality_question", url=url), reply_markup=markup)
+        default_fmt = db.get_default_fmt(u.effective_user.id)
+        if default_fmt:
+            msg = await q.edit_message_text(t(lang, "queued_adding"))
+            try:
+                jid, pos = enqueue(u.effective_chat.id, u.effective_user.id, url, default_fmt, msg.message_id, lang)
+                await q.edit_message_text(t(lang, "queued", pos=pos, jid=jid))
+            except QueueFull:
+                await q.edit_message_text(t(lang, "queue_full"))
+        else:
+            PENDING[u.effective_chat.id] = url
+            await q.edit_message_text(t(lang, "probing"))
+            markup = await probe_markup(lang, url)
+            await q.edit_message_text(t(lang, "quality_question", url=url), reply_markup=markup)
     elif url:
         username = ig_profile_username(url)
         if username:
@@ -283,6 +324,15 @@ async def on_message(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await _direct_message(u, url, lang, "audio"); return
     if is_ig_story(url):
         await _direct_message(u, url, lang); return
+    default_fmt = db.get_default_fmt(u.effective_user.id)
+    if default_fmt:
+        msg = await u.message.reply_text(t(lang, "queued_adding"))
+        try:
+            jid, pos = enqueue(u.effective_chat.id, u.effective_user.id, url, default_fmt, msg.message_id, lang)
+            await msg.edit_text(t(lang, "queued", pos=pos, jid=jid))
+        except QueueFull:
+            await msg.edit_text(t(lang, "queue_full"))
+        return
     PENDING[u.effective_chat.id] = url
     msg = await u.message.reply_text(t(lang, "probing"))
     markup = await probe_markup(lang, url)
@@ -344,6 +394,8 @@ def main():
     app.add_error_handler(_error_handler)
     app.add_handler(CommandHandler("start", start)); app.add_handler(CommandHandler("help", start))
     app.add_handler(CommandHandler("language", language_cmd))
+    app.add_handler(CommandHandler("settings", settings_cmd))
+    app.add_handler(CallbackQueryHandler(on_settings, pattern=r"^set:"))
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CallbackQueryHandler(on_admin, pattern=r"^adm:"))
