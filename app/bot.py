@@ -350,6 +350,27 @@ async def on_pick(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(t(lang, "queued", pos=pos, jid=jid))
     except QueueFull:
         await q.edit_message_text(t(lang, "queue_full"))
+async def on_togif(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    """Done-message 'Convert to GIF': re-queue the same URL as a real-.gif
+    job. The done message keeps its settings/language buttons; only the
+    convert button is removed so a double-tap cannot double-queue."""
+    q = u.callback_query
+    lang = lang_of(u) or "en"
+    job_id = q.data.split(":", 1)[1]
+    job = db.get_job(job_id)
+    if not job or job.get("user_id") != u.effective_user.id:
+        await q.answer(t(lang, "failed_generic")); return
+    await q.answer()
+    try:
+        await q.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "settings_button"), callback_data="set:open"), InlineKeyboardButton(t(lang, "language_button"), callback_data="langmenu")]]))
+    except Exception:
+        pass
+    msg = await q.message.reply_text(t(lang, "queued_adding"))
+    try:
+        jid, pos = enqueue(u.effective_chat.id, u.effective_user.id, job["url"], "togif", msg.message_id, lang)
+        await msg.edit_text(t(lang, "queued", pos=pos, jid=jid))
+    except QueueFull:
+        await msg.edit_text(t(lang, "queue_full"))
 DEBUG_LOG = "/data/updates.log"
 def _dbg(rec):
     try:
@@ -404,6 +425,7 @@ def main():
     app.add_handler(CallbackQueryHandler(on_lang_pick, pattern=r"^lang:"))
     app.add_handler(CallbackQueryHandler(on_lang_menu, pattern=r"^langmenu$"))
     app.add_handler(CallbackQueryHandler(on_pick, pattern=r"^dl:"))
+    app.add_handler(CallbackQueryHandler(on_togif, pattern=r"^togif:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     app.run_polling(drop_pending_updates=False, timeout=30, bootstrap_retries=-1)  # False: never eat user messages across a restart (2026-10-22: the owner's /stats sent during a stall were silently discarded by True)
 if __name__ == "__main__": main()
