@@ -44,7 +44,7 @@ def send_document_file(chat_id, path: Path, caption: str = ""):
     with path.open("rb") as f:
         return tg("sendDocument", chat_id=chat_id, caption=caption[:1000], document=(path.name, f))
 def send_animation(chat_id, path: Path, caption: str = ""):
-    """Telegram-native GIF: a muted looping MP4 (sendAnimation)."""
+    """Animation send: a muted looping MP4 or a real .gif file (sendAnimation)."""
     extra = _probe_video(path)
     with path.open("rb") as f:
         return tg("sendAnimation", chat_id=chat_id, caption=caption[:1000], timeout=FILE_SEND_TIMEOUT, animation=(path.name, f), **extra)
