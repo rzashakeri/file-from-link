@@ -2,7 +2,8 @@ import shutil
 from pathlib import Path
 from . import db
 from .downloader import download, DownloadError, get_direct_url, resolve_stream_match
-from .sender import deliver, send_text, edit_text, send_document_file, copy_message
+from .sender import deliver, send_text, edit_text, send_document_file, copy_message, send_animation
+from .gif import to_animation
 from .config import DOWNLOAD_DIR, TELEGRAM_LIMIT, JOB_TIMEOUT
 from .i18n import t as tr
 from .utils import is_spotify, is_apple_music
@@ -26,19 +27,25 @@ def process_job(job_id: str, status_message_id: int | None = None):
             if status_message_id: edit_text(chat_id, status_message_id, tr(lang, "matching"))
             url = resolve_stream_match(url)
         path, meta = download(url, fmt, job_id, prog)
+        if fmt == "gif":
+            try: path = to_animation(path, job_id)
+            except Exception: pass  # fall back to the original video
         db.update_job(job_id, status="uploading", title=meta.get("title",""), filepath=str(path), filesize=path.stat().st_size)
         if status_message_id: edit_text(chat_id, status_message_id, tr(lang, "uploading"))
-        direct = None
-        if path.stat().st_size > TELEGRAM_LIMIT:
-            try: direct = get_direct_url(job["url"], fmt)
-            except Exception: direct = None
-        deliver(chat_id, path, meta.get("title",""), lang, direct)
+        if fmt == "gif" and path.suffix.lower() == ".mp4" and path.stat().st_size <= TELEGRAM_LIMIT:
+            send_animation(chat_id, path, f"{meta.get('title','')}\n{tr(lang, 'footer')}"[:1000])
+        else:
+            direct = None
+            if path.stat().st_size > TELEGRAM_LIMIT:
+                try: direct = get_direct_url(job["url"], fmt)
+                except Exception: direct = None
+            deliver(chat_id, path, meta.get("title",""), lang, direct)
         for extra in (meta.get("files") or [])[1:]:
             try: deliver(chat_id, Path(extra), "", lang, None)
             except Exception: pass
-        _deliver_extras(chat_id, job_id, meta, lang)
+        if fmt != "gif": _deliver_extras(chat_id, job_id, meta, lang)
         db.update_job(job_id, status="done")
-        if status_message_id: edit_text(chat_id, status_message_id, tr(lang, "done", title=meta.get("title","")))
+        if status_message_id: edit_text(chat_id, status_message_id, tr(lang, "done", title=meta.get("title","")), reply_markup={"inline_keyboard": [[{"text": tr(lang, "settings_button"), "callback_data": "set:open"}]]})
     except DownloadError as e:
         db.update_job(job_id, status="failed", error=str(e))
         send_text(chat_id, tr(lang, "failed", error=str(e)))
