@@ -87,7 +87,8 @@ async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await u.message.reply_text(t("en", "choose_language"), reply_markup=lang_markup())
     else:
         await u.message.reply_text(t(lang, "welcome"),
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "language_button"), callback_data="langmenu")]]))
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "language_button"), callback_data="langmenu"),
+                                                InlineKeyboardButton(t(lang, "settings_button"), callback_data="set:open")]]))
 BC_STATE: dict[int, dict] = {}
 def _admin_markup(lang):
     return InlineKeyboardMarkup([
