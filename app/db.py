@@ -15,6 +15,9 @@ def init():
             con.execute("ALTER TABLE jobs ADD COLUMN lang TEXT DEFAULT 'en'")
         if "status_message_id" not in cols:
             con.execute("ALTER TABLE jobs ADD COLUMN status_message_id INTEGER")
+        ucols = [r[1] for r in con.execute("PRAGMA table_info(users)")]
+        if "default_fmt" not in ucols:
+            con.execute("ALTER TABLE users ADD COLUMN default_fmt TEXT")
         con.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created)")
 init()
 def create_job(chat_id, user_id, url, fmt, lang="en", status_message_id=None):
@@ -32,6 +35,16 @@ def set_lang(user_id, lang):
         con.execute("INSERT INTO users (user_id, lang, updated) VALUES (?,?,?) "
                     "ON CONFLICT(user_id) DO UPDATE SET lang=excluded.lang, updated=excluded.updated",
                     (user_id, lang, time.time()))
+def get_default_fmt(user_id):
+    """The user's saved default quality (None = ask every time)."""
+    with _c() as con:
+        r = con.execute("SELECT default_fmt FROM users WHERE user_id=?", (user_id,)).fetchone()
+    return r["default_fmt"] if r and r["default_fmt"] else None
+def set_default_fmt(user_id, fmt):
+    with _c() as con:
+        con.execute("INSERT INTO users (user_id, default_fmt, updated) VALUES (?,?,?) "
+                    "ON CONFLICT(user_id) DO UPDATE SET default_fmt=excluded.default_fmt, updated=excluded.updated",
+                    (user_id, fmt, time.time()))
 def update_job(jid, **kw):
     kw["updated"] = time.time()
     cols = ", ".join(f"{k}=?" for k in kw)
