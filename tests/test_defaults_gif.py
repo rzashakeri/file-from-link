@@ -8,7 +8,7 @@ os.environ.pop("MAX_FILE_BYTES", None)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from app import db
 from app.config import MAX_FILE_BYTES, DOWNLOAD_DIR
-from app.gif import to_animation
+from app.gif import to_animation, to_gif, probe_video, CONVERT_MAX_SECONDS
 from app.utils import FORMATS, format_selector
 from pathlib import Path
 
@@ -68,3 +68,35 @@ def test_to_animation_rejects_non_video():
         raise AssertionError("should have raised")
     except ValueError:
         pass
+
+def test_format_selector_togif_falls_back_to_best():
+    assert format_selector("togif") == FORMATS["best"]
+
+def test_probe_video_reports_stream_and_duration():
+    src = _make_video("probe.mp4", 2)
+    has_video, dur = probe_video(src)
+    assert has_video is True and dur is not None and 1.5 <= dur <= 2.5
+    assert probe_video(Path(_tmp) / "missing.mp4") == (False, None)
+
+def test_to_gif_produces_real_gif_no_audio():
+    src = _make_video("gifsrc.mp4", 2)
+    out = to_gif(src, "jobgif")
+    assert out.suffix == ".gif" and out.exists() and out.stat().st_size > 0
+    data = _probe(out)
+    kinds = [s["codec_type"] for s in data["streams"]]
+    assert "video" in kinds and "audio" not in kinds
+    v = next(s for s in data["streams"] if s["codec_type"] == "video")
+    assert v["width"] == 480
+    assert v["codec_name"] == "gif"
+
+def test_to_gif_rejects_non_video():
+    fake = Path(_tmp) / "pic2.jpg"
+    fake.write_bytes(b"not an image")
+    try:
+        to_gif(fake, "jobgif2")
+        raise AssertionError("should have raised")
+    except ValueError:
+        pass
+
+def test_convert_threshold_is_30s():
+    assert CONVERT_MAX_SECONDS == 30
