@@ -3,7 +3,7 @@
 
 Self-heals the realistic freeze modes without any external dependency:
   1. A compose service is down or the worker pool shrank -> bring the
-     stack back up at the pinned scale (worker=3).
+     stack back up at the pinned scale (worker=6).
   2. Jobs stuck in downloading/uploading beyond the RQ timeout + grace
      (the worker died too hard for the failure callback to run) ->
      reconcile them in the bot container (marks failed, notifies the
@@ -19,7 +19,7 @@ import time
 
 BASE = "/opt/file-from-link"
 DOCKER = "/usr/bin/docker"
-EXPECTED = {"bot": 1, "api": 1, "redis": 1, "pot-provider": 1, "worker": 3}
+EXPECTED = {"bot": 1, "api": 1, "redis": 1, "pot-provider": 1, "worker": 6}
 
 
 def log(msg):
@@ -56,7 +56,7 @@ def main():
     short = {s: (counts.get(s, 0), n) for s, n in EXPECTED.items() if counts.get(s, 0) < n}
     if short:
         log(f"services below expected {short} (have {counts}); running compose up")
-        run(DOCKER, "compose", "up", "-d", "--scale", "worker=3", timeout=300)
+        run(DOCKER, "compose", "up", "-d", "--scale", "worker=6", timeout=300)
         log(f"after up: {running_counts()}")
 
     # Stale-job reconcile inside the bot container (has the app + DB path).
