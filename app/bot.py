@@ -4,7 +4,7 @@ Language flow: a new user first picks a language with inline glass buttons
 after that — welcome, quality picker, queue position, progress, delivery —
 uses it. Change it anytime with /language."""
 import asyncio, io, logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove, InputFile
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters, TypeHandler, ApplicationHandlerStop
 import json as _json
 from telegram.request import HTTPXRequest
@@ -42,7 +42,7 @@ async def _send_profile_pic(u, username, lang):
     msg = await u.message.reply_text(t(lang, "fetching_pic"))
     try:
         pic = await asyncio.to_thread(fetch_profile_pic, username)
-        await u.message.reply_photo(photo=io.BytesIO(pic), caption=f"@{username}")
+        await u.message.reply_document(document=InputFile(io.BytesIO(pic), filename=f"{username}.jpg"), caption=f"@{username}")
         await msg.delete()
     except Exception:
         await msg.edit_text(t(lang, "pic_failed"))
@@ -299,7 +299,7 @@ async def on_lang_pick(u: Update, c: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text(t(lang, "fetching_pic"))
             try:
                 pic = await asyncio.to_thread(fetch_profile_pic, username)
-                await c.bot.send_photo(u.effective_chat.id, photo=io.BytesIO(pic), caption=f"@{username}")
+                await c.bot.send_document(u.effective_chat.id, document=InputFile(io.BytesIO(pic), filename=f"{username}.jpg"), caption=f"@{username}")
                 await q.edit_message_text(t(lang, "language_set"))
             except Exception:
                 await q.edit_message_text(t(lang, "pic_failed"))
