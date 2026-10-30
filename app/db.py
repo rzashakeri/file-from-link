@@ -19,6 +19,8 @@ def init():
         if "default_fmt" not in ucols:
             con.execute("ALTER TABLE users ADD COLUMN default_fmt TEXT")
         con.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created)")
+        con.execute("""CREATE TABLE IF NOT EXISTS inline_tokens(
+          token TEXT PRIMARY KEY, url TEXT, created REAL)""")
 init()
 def create_job(chat_id, user_id, url, fmt, lang="en", status_message_id=None):
     jid = uuid.uuid4().hex[:12]; now = time.time()
@@ -92,3 +94,17 @@ def first_user_id():
     with _c() as con:
         r = con.execute("SELECT user_id FROM jobs ORDER BY created ASC LIMIT 1").fetchone()
     return r["user_id"] if r else None
+INLINE_TOKEN_TTL = 3600
+def save_inline_token(token, url):
+    """Inline handoff: a switch-to-PM button can only carry 64 chars, so
+    the link itself lives here for an hour under a short random token.
+    Expired rows are swept on every save; the row is deleted on redeem."""
+    now = time.time()
+    with _c() as con:
+        con.execute("DELETE FROM inline_tokens WHERE created<?", (now - INLINE_TOKEN_TTL,))
+        con.execute("INSERT INTO inline_tokens (token, url, created) VALUES (?,?,?)", (token, url, now))
+def take_inline_token(token):
+    with _c() as con:
+        r = con.execute("SELECT url FROM inline_tokens WHERE token=?", (token,)).fetchone()
+        if r: con.execute("DELETE FROM inline_tokens WHERE token=?", (token,))
+    return r["url"] if r else None
