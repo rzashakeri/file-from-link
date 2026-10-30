@@ -5,7 +5,7 @@ after that — welcome, quality picker, queue position, progress, delivery —
 uses it. Change it anytime with /language."""
 import asyncio, io, logging
 import secrets
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove, InputFile
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove, InputFile, InlineQueryResultsButton
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, InlineQueryHandler, ContextTypes, filters, TypeHandler, ApplicationHandlerStop
 import json as _json
 from telegram.request import HTTPXRequest
@@ -356,13 +356,14 @@ async def on_pick(u: Update, c: ContextTypes.DEFAULT_TYPE):
     except QueueFull:
         await q.edit_message_text(t(lang, "queue_full"))
 async def on_inline_query(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    """Inline funnel: answer fast with a switch-to-PM button, never a
+    """Inline funnel: answer fast with a button that opens the bot, never a
     download. Telegram only waits seconds for an inline answer and a
     download takes minutes (longer with a queue), so the button carries
     a one-hour token for the link; /start redeems it into the normal
-    flow. Empty results + switch button = nothing junk posted in the
+    flow. Empty results + button = nothing junk posted in the
     chat the query came from. Language: the user's stored language, else
-    their Telegram language code, else English."""
+    their Telegram language code, else English. PTB 22 replaced the old
+    switch_pm_text/switch_pm_parameter with InlineQueryResultsButton."""
     q = u.inline_query
     lang = db.get_lang(q.from_user.id)
     if not lang:
@@ -372,9 +373,9 @@ async def on_inline_query(u: Update, c: ContextTypes.DEFAULT_TYPE):
     if urls:
         token = secrets.token_hex(8)
         db.save_inline_token(token, urls[0])
-        await q.answer([], switch_pm_text=t(lang, "inline_download"), switch_pm_parameter=token, cache_time=0)
+        await q.answer([], button=InlineQueryResultsButton(text=t(lang, "inline_download"), start_parameter=token), cache_time=0)
     else:
-        await q.answer([], switch_pm_text=t(lang, "inline_open"), switch_pm_parameter="inline", cache_time=0)
+        await q.answer([], button=InlineQueryResultsButton(text=t(lang, "inline_open"), start_parameter="inline"), cache_time=0)
 async def on_togif(u: Update, c: ContextTypes.DEFAULT_TYPE):
     """Done-message 'Convert to GIF': re-queue the same URL as a real-.gif
     job. The done message keeps its settings/language buttons; only the
