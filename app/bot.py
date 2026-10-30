@@ -4,8 +4,9 @@ Language flow: a new user first picks a language with inline glass buttons
 after that — welcome, quality picker, queue position, progress, delivery —
 uses it. Change it anytime with /language."""
 import asyncio, io, logging
+import secrets
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove, InputFile
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters, TypeHandler, ApplicationHandlerStop
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, InlineQueryHandler, ContextTypes, filters, TypeHandler, ApplicationHandlerStop
 import json as _json
 from telegram.request import HTTPXRequest
 import time as _time
@@ -82,6 +83,10 @@ def lang_of(u: Update):
     return db.get_lang(u.effective_user.id)
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    if c.args:
+        url = db.take_inline_token(c.args[0])
+        if url:
+            await on_message(u, c, url); return
     lang = lang_of(u)
     if not lang:
         await u.message.reply_text(t("en", "choose_language"), reply_markup=lang_markup())
@@ -309,8 +314,8 @@ async def on_lang_pick(u: Update, c: ContextTypes.DEFAULT_TYPE):
             await _enqueue_direct(q, u.effective_chat.id, u.effective_user.id, url, lang)
     else:
         await q.edit_message_text(t(lang, "language_set") + "\n\n" + t(lang, "welcome"))
-async def on_message(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    urls = extract_urls(u.message.text or "")
+async def on_message(u: Update, c: ContextTypes.DEFAULT_TYPE, _url=None):
+    urls = [_url] if _url else extract_urls(u.message.text or "")
     lang = lang_of(u)
     if not urls:
         await u.message.reply_text(t(lang or "en", "no_url")); return
@@ -350,6 +355,26 @@ async def on_pick(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(t(lang, "queued", pos=pos, jid=jid))
     except QueueFull:
         await q.edit_message_text(t(lang, "queue_full"))
+async def on_inline_query(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    """Inline funnel: answer fast with a switch-to-PM button, never a
+    download. Telegram only waits seconds for an inline answer and a
+    download takes minutes (longer with a queue), so the button carries
+    a one-hour token for the link; /start redeems it into the normal
+    flow. Empty results + switch button = nothing junk posted in the
+    chat the query came from. Language: the user's stored language, else
+    their Telegram language code, else English."""
+    q = u.inline_query
+    lang = db.get_lang(q.from_user.id)
+    if not lang:
+        code = (q.from_user.language_code or "en")[:2]
+        lang = code if code in LANGUAGES else "en"
+    urls = extract_urls(q.query or "")
+    if urls:
+        token = secrets.token_hex(8)
+        db.save_inline_token(token, urls[0])
+        await q.answer([], switch_pm_text=t(lang, "inline_download"), switch_pm_parameter=token, cache_time=0)
+    else:
+        await q.answer([], switch_pm_text=t(lang, "inline_open"), switch_pm_parameter="inline", cache_time=0)
 async def on_togif(u: Update, c: ContextTypes.DEFAULT_TYPE):
     """Done-message 'Convert to GIF': re-queue the same URL as a real-.gif
     job. The done message keeps its settings/language buttons; only the
@@ -426,6 +451,7 @@ def main():
     app.add_handler(CallbackQueryHandler(on_lang_menu, pattern=r"^langmenu$"))
     app.add_handler(CallbackQueryHandler(on_pick, pattern=r"^dl:"))
     app.add_handler(CallbackQueryHandler(on_togif, pattern=r"^togif:"))
+    app.add_handler(InlineQueryHandler(on_inline_query))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     app.run_polling(drop_pending_updates=False, timeout=30, bootstrap_retries=-1)  # False: never eat user messages across a restart (2026-10-22: the owner's /stats sent during a stall were silently discarded by True)
 if __name__ == "__main__": main()
