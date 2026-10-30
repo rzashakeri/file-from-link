@@ -87,6 +87,13 @@ async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
         url = db.take_inline_token(c.args[0])
         if url:
             await on_message(u, c, url); return
+        if len(c.args[0]) == 16 and all(ch in "0123456789abcdef" for ch in c.args[0]):
+            # Consumed or expired inline token (tokens are single-use, so a
+            # second tap on the same button lands here): don't repeat the
+            # full welcome, just say the button is spent and the link can
+            # be sent directly.
+            lang = lang_of(u) or "en"
+            await u.message.reply_text(t(lang, "inline_used")); return
     lang = lang_of(u)
     if not lang:
         await u.message.reply_text(t("en", "choose_language"), reply_markup=lang_markup())
