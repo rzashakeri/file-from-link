@@ -88,12 +88,13 @@ async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
         if url:
             await on_message(u, c, url); return
         if len(c.args[0]) == 16 and all(ch in "0123456789abcdef" for ch in c.args[0]):
-            # Consumed or expired inline token (tokens are single-use, so a
-            # second tap on the same button lands here): don't repeat the
-            # full welcome, just say the button is spent and the link can
-            # be sent directly.
-            lang = lang_of(u) or "en"
-            await u.message.reply_text(t(lang, "inline_used")); return
+            # Consumed inline token: stay silent. The button only exists in
+            # the live inline results panel, so a consumed token is always
+            # a second tap on the same button (or a duplicate delivery of
+            # the first tap) — and the first tap already produced the
+            # picker/queue flow. Any message here is pure noise, and
+            # silence also keeps a repeat tap from ever duplicating a job.
+            return
     lang = lang_of(u)
     if not lang:
         await u.message.reply_text(t("en", "choose_language"), reply_markup=lang_markup())
