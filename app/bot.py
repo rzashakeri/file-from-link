@@ -11,12 +11,13 @@ import json as _json
 from telegram.request import HTTPXRequest
 import time as _time
 from .config import BOT_TOKEN, OWNER_ID, PUBLIC_DIR, BOT_API_BASE_URL
-from .utils import extract_urls, FORMAT_ORDER, ig_profile_username, is_ig_story, is_spotify, is_apple_music
+from .utils import extract_urls, FORMAT_ORDER, ig_profile_username, is_ig_story, is_spotify, is_apple_music, classify_url
 from .queue import enqueue, QueueFull, enqueue_broadcast
 from . import db
+from . import github as _github
 from .i18n import LANGUAGES, t, fmt_label
 from .position_updates import position_loop
-from .downloader import list_qualities, list_qualities_generic
+from .downloader import probe_media
 from .ig import fetch_profile_pic
 logging.basicConfig(level=logging.INFO)
 PENDING: dict[int, str] = {}
@@ -67,18 +68,42 @@ def dynamic_markup(lang, qualities, show_gif=False):
         rows.append([InlineKeyboardButton(fmt_label(lang, a), callback_data=f"dl:{a}")])
     if show_gif: rows.append([InlineKeyboardButton("🎞 GIF", callback_data="dl:gif")])
     return InlineKeyboardMarkup(rows)
+def photo_markup(lang, images):
+    """Photo rows: one per real size the source offers (largest first).
+    A source with a single size gets exactly one row — never the video
+    qualities 720/1080."""
+    rows = []
+    for (w, h) in (images or [])[:4]:
+        label = f"🖼 {w}×{h}" if w else f"🖼 {h}p"
+        rows.append([InlineKeyboardButton(label, callback_data=f"dl:img{h}")])
+    if not rows:
+        rows.append([InlineKeyboardButton(t(lang, "photo_original"), callback_data="dl:photo")])
+    return InlineKeyboardMarkup(rows)
+def audio_markup(lang):
+    """Audio rows: the mp3 tiers plus the original file, no video rows."""
+    rows = [[InlineKeyboardButton(fmt_label(lang, a), callback_data=f"dl:{a}")]
+            for a in ("audiohq", "audio", "audiolow")]
+    rows.append([InlineKeyboardButton(t(lang, "fmt_audioorig"), callback_data="dl:audioorig")])
+    return InlineKeyboardMarkup(rows)
 async def probe_markup(lang, url):
-    """Buttons from the video's REAL formats; falls back to the static list.
-    YouTube gets the rich multi-client probe; every other site gets one
-    quick generic probe (2026-10-22: the quality picker is back for ALL
-    sites, per user requests)."""
+    """Buttons from the media's REAL kind. Video gets heights (+ audio
+    tiers); a photo gets its real sizes; audio gets the mp3 tiers +
+    the original file; a direct file link gets no picker at all (the
+    caller enqueues it directly). Unknown media keeps the static list."""
     try:
-        probe = list_qualities if _is_youtube(url) else list_qualities_generic
-        qualities = await asyncio.wait_for(asyncio.to_thread(probe, url), timeout=25)
+        media = await asyncio.wait_for(asyncio.to_thread(probe_media, url), timeout=25)
     except Exception:
-        qualities = []  # timeout or probe error -> static picker, never a hang
-    show_gif = _is_x(url)
-    return dynamic_markup(lang, qualities, show_gif) if qualities else quality_markup(lang, show_gif)
+        media = {"kind": "unknown", "heights": [], "images": [], "has_audio": False}
+    kind = media.get("kind") or "unknown"
+    if kind == "file":
+        return None
+    if kind == "photo":
+        return photo_markup(lang, media.get("images") or [])
+    if kind == "audio":
+        return audio_markup(lang)
+    if kind == "video" and media.get("heights"):
+        return dynamic_markup(lang, media["heights"], _is_x(url))
+    return quality_markup(lang, _is_x(url))
 def lang_of(u: Update):
     return db.get_lang(u.effective_user.id)
 
@@ -292,6 +317,20 @@ async def on_lang_pick(u: Update, c: ContextTypes.DEFAULT_TYPE):
     if lang not in LANGUAGES: lang = "en"
     db.set_lang(u.effective_user.id, lang)
     url = PENDING.pop(u.effective_chat.id, None)
+    if url and _github.is_github(url):
+        kind = _github.parse_github_url(url).get("kind")
+        if kind in ("asset", "archive", "raw", "blob"):
+            await _enqueue_direct(q, u.effective_chat.id, u.effective_user.id, url, lang, "ghfile"); return
+        if kind in ("repo", "releases", "release"):
+            await q.edit_message_text(t(lang, "probing"))
+            if kind == "release":
+                parsed = _github.parse_github_url(url)
+                await _github_show_assets(q.edit_message_text, u.effective_chat.id, parsed["owner"], parsed["repo"], parsed["tag"], lang)
+            else:
+                await _github_show_releases(q.edit_message_text, u.effective_chat.id, url, lang)
+            return
+    if url and classify_url(url) == "file":
+        await _enqueue_direct(q, u.effective_chat.id, u.effective_user.id, url, lang, "best"); return
     if url and not is_spotify(url) and not is_apple_music(url) and not ig_profile_username(url) and not is_ig_story(url):
         default_fmt = db.get_default_fmt(u.effective_user.id)
         if default_fmt:
@@ -305,6 +344,8 @@ async def on_lang_pick(u: Update, c: ContextTypes.DEFAULT_TYPE):
             PENDING[u.effective_chat.id] = url
             await q.edit_message_text(t(lang, "probing"))
             markup = await probe_markup(lang, url)
+            if markup is None:
+                await _enqueue_direct(q, u.effective_chat.id, u.effective_user.id, url, lang, "best"); return
             await q.edit_message_text(t(lang, "quality_question", url=url), reply_markup=markup)
     elif url:
         username = ig_profile_username(url)
@@ -322,6 +363,78 @@ async def on_lang_pick(u: Update, c: ContextTypes.DEFAULT_TYPE):
             await _enqueue_direct(q, u.effective_chat.id, u.effective_user.id, url, lang)
     else:
         await q.edit_message_text(t(lang, "language_set") + "\n\n" + t(lang, "welcome"))
+GH_STATE: dict[int, dict] = {}
+def _gh_error_key(e) -> str:
+    msg = str(e).lower()
+    if "not found" in msg: return "gh_not_found"
+    if "rate" in msg: return "gh_rate_limited"
+    return "failed_generic"
+async def _github_show_releases(send, chat_id, url, lang):
+    """Releases picker for a repo / releases URL. `send` is a bound
+    reply_text / edit_message_text."""
+    parsed = _github.parse_github_url(url)
+    try:
+        releases = await asyncio.to_thread(_github.list_releases, parsed["owner"], parsed["repo"])
+    except _github.GitHubError as e:
+        await send(t(lang, _gh_error_key(e))); return
+    if not releases:
+        await send(t(lang, "gh_no_releases")); return
+    GH_STATE[chat_id] = {"owner": parsed["owner"], "repo": parsed["repo"], "releases": releases}
+    rows = []
+    for i, rel in enumerate(releases[:10]):
+        tag = rel["tag"]
+        label = f"⭐ {tag} · {t(lang, 'gh_latest')}" if i == 0 else f"📦 {tag}"
+        rows.append([InlineKeyboardButton(label, callback_data=f"gh:rel:{i}")])
+    await send(t(lang, "gh_releases", repo=f"{parsed['owner']}/{parsed['repo']}"),
+               reply_markup=InlineKeyboardMarkup(rows))
+async def _github_show_assets(send, chat_id, owner, repo, tag, lang):
+    """Asset picker for one release."""
+    try:
+        rel = await asyncio.to_thread(_github.get_release, owner, repo, tag)
+    except _github.GitHubError as e:
+        await send(t(lang, _gh_error_key(e))); return
+    assets = rel.get("assets") or []
+    if not assets:
+        await send(t(lang, "gh_no_assets")); return
+    GH_STATE[chat_id] = {"owner": owner, "repo": repo, "tag": tag, "assets": assets}
+    rows = []
+    for i, a in enumerate(assets):
+        label = f"📦 {a['name']}"
+        if a.get("size"): label += f" · {a['size'] // 1048576} MB"
+        rows.append([InlineKeyboardButton(label, callback_data=f"gh:asset:{i}")])
+    await send(t(lang, "gh_assets", tag=tag), reply_markup=InlineKeyboardMarkup(rows))
+async def on_gh_release(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    q = u.callback_query; await q.answer()
+    lang = lang_of(u) or "en"
+    st = GH_STATE.get(u.effective_chat.id)
+    if not st or "releases" not in st:
+        await q.edit_message_text(t(lang, "expired")); return
+    try: idx = int(q.data.split(":", 2)[2])
+    except Exception:
+        await q.edit_message_text(t(lang, "expired")); return
+    if idx < 0 or idx >= len(st["releases"]):
+        await q.edit_message_text(t(lang, "expired")); return
+    rel = st["releases"][idx]
+    await _github_show_assets(q.edit_message_text, u.effective_chat.id,
+                              st["owner"], st["repo"], rel["tag"], lang)
+async def on_gh_asset(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    q = u.callback_query; await q.answer()
+    lang = lang_of(u) or "en"
+    st = GH_STATE.pop(u.effective_chat.id, None)
+    if not st or "assets" not in st:
+        await q.edit_message_text(t(lang, "expired")); return
+    try: idx = int(q.data.split(":", 2)[2])
+    except Exception:
+        await q.edit_message_text(t(lang, "expired")); return
+    if idx < 0 or idx >= len(st["assets"]):
+        await q.edit_message_text(t(lang, "expired")); return
+    asset = st["assets"][idx]
+    msg = await q.edit_message_text(t(lang, "queued_adding"))
+    try:
+        jid, pos = enqueue(u.effective_chat.id, u.effective_user.id, asset["url"], "ghfile", msg.message_id, lang)
+        await q.edit_message_text(t(lang, "queued", pos=pos, jid=jid))
+    except QueueFull:
+        await q.edit_message_text(t(lang, "queue_full"))
 async def on_message(u: Update, c: ContextTypes.DEFAULT_TYPE, _url=None):
     urls = [_url] if _url else extract_urls(u.message.text or "")
     lang = lang_of(u)
@@ -338,6 +451,20 @@ async def on_message(u: Update, c: ContextTypes.DEFAULT_TYPE, _url=None):
         await _direct_message(u, url, lang, "audio"); return
     if is_ig_story(url):
         await _direct_message(u, url, lang); return
+    if _github.is_github(url):
+        kind = _github.parse_github_url(url).get("kind")
+        if kind in ("asset", "archive", "raw", "blob"):
+            await _direct_message(u, url, lang, "ghfile"); return
+        if kind in ("repo", "releases", "release"):
+            msg = await u.message.reply_text(t(lang, "probing"))
+            if kind == "release":
+                parsed = _github.parse_github_url(url)
+                await _github_show_assets(msg.edit_text, u.effective_chat.id, parsed["owner"], parsed["repo"], parsed["tag"], lang)
+            else:
+                await _github_show_releases(msg.edit_text, u.effective_chat.id, url, lang)
+            return
+    if classify_url(url) == "file":
+        await _direct_message(u, url, lang, "best"); return
     default_fmt = db.get_default_fmt(u.effective_user.id)
     if default_fmt:
         msg = await u.message.reply_text(t(lang, "queued_adding"))
@@ -350,6 +477,8 @@ async def on_message(u: Update, c: ContextTypes.DEFAULT_TYPE, _url=None):
     PENDING[u.effective_chat.id] = url
     msg = await u.message.reply_text(t(lang, "probing"))
     markup = await probe_markup(lang, url)
+    if markup is None:
+        await _direct_message(u, url, lang, "best"); return
     await msg.edit_text(t(lang, "quality_question", url=url), reply_markup=markup)
 async def on_pick(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
@@ -459,6 +588,8 @@ def main():
     app.add_handler(CallbackQueryHandler(on_lang_pick, pattern=r"^lang:"))
     app.add_handler(CallbackQueryHandler(on_lang_menu, pattern=r"^langmenu$"))
     app.add_handler(CallbackQueryHandler(on_pick, pattern=r"^dl:"))
+    app.add_handler(CallbackQueryHandler(on_gh_release, pattern=r"^gh:rel:"))
+    app.add_handler(CallbackQueryHandler(on_gh_asset, pattern=r"^gh:asset:"))
     app.add_handler(CallbackQueryHandler(on_togif, pattern=r"^togif:"))
     app.add_handler(InlineQueryHandler(on_inline_query))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))

@@ -12,7 +12,7 @@ import shutil
 import yt_dlp
 from .config import DOWNLOAD_DIR, COOKIES_FILE, IG_COOKIES_FILE, X_COOKIES_FILE, JOB_TIMEOUT, POT_BASE_URL, PROXY, MAX_FILE_BYTES
 from . import cobalt as _cobalt
-from .utils import format_selector, is_spotify, is_apple_music
+from .utils import format_selector, is_spotify, is_apple_music, classify_url, IMAGE_EXTS, FILE_EXTS
 class DownloadError(Exception): pass
 BOT_WALL_MARKERS = ("not a bot", "sign in to confirm", "po token", "potoken", "needs to be reloaded", "requested format is not available")
 FALLBACK_CLIENTS = ["tv", "ios", "web_safari"]
@@ -165,7 +165,7 @@ def _ig_api_download(url: str, choice: str, job_id: str, on_progress=None):
         if s.get("video_versions"):
             media.append(("video", _pick(s["video_versions"])["url"]))
         elif (s.get("image_versions2") or {}).get("candidates"):
-            media.append(("image", s["image_versions2"]["candidates"][0]["url"]))
+            media.append(("image", _pick(s["image_versions2"]["candidates"])["url"]))
     if not media: raise DownloadError("no media found in this post")
     if choice in ("audiohq", "audio", "audiolow"):
         vids = [u for k, u in media if k == "video"]
@@ -188,6 +188,13 @@ def _ig_api_download(url: str, choice: str, job_id: str, on_progress=None):
 
 def download(url: str, choice: str, job_id: str, on_progress=None) -> tuple[Path, dict]:
     Path(DOWNLOAD_DIR / job_id).mkdir(parents=True, exist_ok=True)
+    if choice == "ghfile":
+        # GitHub release asset: plain HTTP download, no yt-dlp involved.
+        from .github import download_asset, GitHubError
+        try:
+            return download_asset(url, job_id, on_progress)
+        except GitHubError as e:
+            raise DownloadError(str(e)) from e
     # Hybrid routing: Cobalt-covered services try the Cobalt intermediary
     # first (no burner session needed -- this is what fixes Instagram while
     # its session is dead). Any Cobalt failure falls through to the
@@ -278,59 +285,101 @@ def _est_size(f: dict, duration: float) -> float:
     if f.get("tbr") and duration: return float(f["tbr"]) * 1000 / 8 * duration
     return 0.0
 
-def _aggregate(info, heights: dict) -> None:
-    fmts = info.get("formats") or []
-    dur = float(info.get("duration") or 0)
-    aud = max((_est_size(f, dur) for f in fmts
-               if f.get("acodec") not in (None, "none") and f.get("vcodec") in (None, "none")), default=0.0)
-    for f in fmts:
-        h = f.get("height")
-        if not h or f.get("vcodec") in (None, "none", "images"): continue
-        if str(f.get("format_id", "")).startswith("sb"): continue
-        total = _est_size(f, dur) + (aud if f.get("acodec") in (None, "none") else 0.0)
-        if total > heights.get(h, 0): heights[h] = total
-
 def _to_quality_list(heights: dict) -> list[dict]:
     return [{"height": h, "mb": (heights[h] / 1048576) if heights[h] else None}
             for h in sorted(heights, reverse=True)]
+
+def _classify_infos(infos: list) -> dict:
+    """Kind of the probed media + its real options, unioned across the
+    infos (YouTube is probed once per player client that answers).
+    Video wins over photo/audio (a video page may also list a poster
+    image); photo wins over audio. Returns:
+    {"kind": "video"|"photo"|"audio"|"file"|"unknown",
+     "heights": [{"height", "mb"}], "images": [(w, h)...],
+     "has_audio": bool}"""
+    heights: dict[int, float] = {}
+    images: list[tuple[int, int]] = []
+    seen_img: set[tuple[int, int]] = set()
+    has_audio = False
+    single_ext = None
+    n_formats = 0
+    for info in infos:
+        fmts = info.get("formats") or []
+        n_formats += len(fmts)
+        if len(fmts) == 1:
+            single_ext = (fmts[0].get("ext") or "").lower()
+        dur = float(info.get("duration") or 0)
+        aud = max((_est_size(f, dur) for f in fmts
+                   if f.get("acodec") not in (None, "none") and f.get("vcodec") in (None, "none")), default=0.0)
+        if aud: has_audio = True
+        for f in fmts:
+            h = f.get("height")
+            vc = f.get("vcodec")
+            ext = (f.get("ext") or "").lower()
+            if vc == "images" or (vc in (None, "none") and ext in IMAGE_EXTS):
+                w = f.get("width") or 0
+                key = (w, h or 0)
+                if h and key not in seen_img:
+                    seen_img.add(key); images.append(key)
+                continue
+            if not h or vc in (None, "none"): continue
+            if str(f.get("format_id", "")).startswith("sb"): continue
+            total = _est_size(f, dur) + (aud if f.get("acodec") in (None, "none") else 0.0)
+            if total > heights.get(h, 0): heights[h] = total
+    images.sort(key=lambda wh: wh[0] * wh[1], reverse=True)
+    heights_list = _to_quality_list(heights)
+    if heights_list: kind = "video"
+    elif images: kind = "photo"
+    elif has_audio: kind = "audio"
+    elif n_formats == 1 and single_ext in FILE_EXTS: kind = "file"
+    else: kind = "unknown"
+    return {"kind": kind, "heights": heights_list, "images": images[:4], "has_audio": has_audio}
+
+def _probe_info(url: str) -> list:
+    """extract_info without downloading. YouTube: one probe per player
+    client that answers (same set list_qualities used). Raises the last
+    error when no client answers at all."""
+    clients = [None] + FALLBACK_CLIENTS if "youtu" in url else [None]
+    infos, last_err = [], None
+    for client in clients:
+        try:
+            opts = _build_opts("best", "probe", None, client, url)
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                infos.append(ydl.extract_info(url, download=False))
+        except Exception as e:
+            last_err = e; continue
+    if not infos:
+        if last_err: raise last_err
+        raise DownloadError("probe failed")
+    return infos
+
+def probe_media(url: str) -> dict:
+    """What kind of media a link is, and its real download options.
+    Direct file links are classified from the extension alone (no
+    network). Everything else is probed; an Instagram post whose probe
+    finds no video formats is a photo post (yt-dlp only sees videos)."""
+    kind = classify_url(url)
+    if kind:
+        return {"kind": kind, "heights": [], "images": [], "has_audio": kind == "audio"}
+    try:
+        infos = _probe_info(url)
+    except Exception as e:
+        if ("instagram.com" in url and any(s in url for s in ("/p/", "/reel/", "/reels/", "/tv/"))
+                and "no video formats" in str(e).lower()):
+            return {"kind": "photo", "heights": [], "images": [], "has_audio": False}
+        return {"kind": "unknown", "heights": [], "images": [], "has_audio": False}
+    return _classify_infos(infos)
 
 def list_qualities_generic(url: str) -> list[dict]:
     """Single quick probe for non-YouTube sources (Instagram, TikTok, X, ...).
     Returns [] when the site will not describe its formats — the caller then
     falls back to the static quality list."""
-    opts = _build_opts("best", "probe", None, None, url)
-    opts.pop("writesubtitles", None); opts.pop("writeautomaticsub", None)
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-    heights: dict[int, float] = {}
-    _aggregate(info, heights)
-    return _to_quality_list(heights)
+    return _classify_infos(_probe_info(url))["heights"]
 
 def list_qualities(url: str) -> list[dict]:
     """Real downloadable resolutions for THIS video (union across the player
     clients that answer), each with an approximate total size in MB."""
-    heights: dict[int, float] = {}
-    last_err: Exception | None = None
-    for client in [None] + FALLBACK_CLIENTS:
-        try:
-            opts = _build_opts("best", "probe", None, client, url)
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-        except Exception as e:
-            last_err = e; continue
-        fmts = info.get("formats") or []
-        dur = float(info.get("duration") or 0)
-        aud = max((_est_size(f, dur) for f in fmts
-                   if f.get("acodec") not in (None, "none") and f.get("vcodec") in (None, "none")), default=0.0)
-        for f in fmts:
-            h = f.get("height")
-            if not h or f.get("vcodec") in (None, "none", "images"): continue
-            if str(f.get("format_id", "")).startswith("sb"): continue
-            total = _est_size(f, dur) + (aud if f.get("acodec") in (None, "none") else 0.0)
-            if total > heights.get(h, 0): heights[h] = total
-    if not heights and last_err: raise last_err
-    return [{"height": h, "mb": (heights[h] / 1048576) if heights[h] else None}
-            for h in sorted(heights, reverse=True)]
+    return _classify_infos(_probe_info(url))["heights"]
 
 def _spotify_query(url: str) -> str:
     import httpx
