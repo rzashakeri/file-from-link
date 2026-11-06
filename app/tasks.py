@@ -28,7 +28,7 @@ def process_job(job_id: str, status_message_id: int | None = None):
         if is_spotify(url) or is_apple_music(url):
             if status_message_id: edit_text(chat_id, status_message_id, tr(lang, "matching"))
             url = resolve_stream_match(url)
-        path, meta = download(url, fmt, job_id, prog)
+        path, meta = download(url, fmt, job_id, prog, lang)
         if fmt == "gif":
             try: path = to_animation(path, job_id)
             except Exception: log.exception("gif animation conversion failed for job %s", job_id)  # fall back to the original video

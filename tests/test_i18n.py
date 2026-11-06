@@ -22,6 +22,7 @@ def test_placeholders_format():
         t(lang, "too_big", title="v", mb=80, hours=24, url="https://l")
         t(lang, "direct_link", url="https://l")
         t(lang, "gh_releases", repo="o/r"); t(lang, "gh_assets", tag="v1.3.1")
+        t(lang, "gplay_too_big", mb=2500)
         t(lang, "stats", users=1, jobs=2, today=3, done=4, failed=5, storage="1 MB")
         t(lang, "broadcast_confirm", n=1); t(lang, "broadcast_started", n=1)
         t(lang, "broadcast_progress", ok=1, blocked=2, failed=3, n=6)

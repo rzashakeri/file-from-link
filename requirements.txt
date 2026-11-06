@@ -12,3 +12,4 @@ python-dotenv>=1.0
 boto3>=1.34
 bgutil-ytdlp-pot-provider>=1.2
 yt-dlp-ejs
+gplaydl==4.2.1

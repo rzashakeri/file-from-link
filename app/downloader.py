@@ -186,8 +186,19 @@ def _ig_api_download(url: str, choice: str, job_id: str, on_progress=None):
     return files[0], {"title": title, "duration": None, "extractor": "InstagramAPI",
                       "description": caption, "subtitles": [], "files": [str(f) for f in files]}
 
-def download(url: str, choice: str, job_id: str, on_progress=None) -> tuple[Path, dict]:
+def download(url: str, choice: str, job_id: str, on_progress=None, lang: str = "en") -> tuple[Path, dict]:
     Path(DOWNLOAD_DIR / job_id).mkdir(parents=True, exist_ok=True)
+    if choice == "gplay":
+        # Google Play: gplaydl library (unofficial Play API), base APK +
+        # split APKs + OBB/asset packs, SHA-verified by gplaydl itself.
+        from .gplay import download_play_apk, GooglePlayError, extract_package
+        package = extract_package(url)
+        if not package:
+            raise DownloadError("could not read the package name from that Play link")
+        try:
+            return download_play_apk(package, job_id, lang, on_progress)
+        except GooglePlayError as e:
+            raise DownloadError(str(e)) from e
     if choice == "ghfile":
         # GitHub release asset: plain HTTP download, no yt-dlp involved.
         from .github import download_asset, GitHubError

@@ -15,6 +15,7 @@ from .utils import extract_urls, FORMAT_ORDER, ig_profile_username, is_ig_story,
 from .queue import enqueue, QueueFull, enqueue_broadcast
 from . import db
 from . import github as _github
+from . import gplay as _gplay
 from .i18n import LANGUAGES, t, fmt_label
 from .position_updates import position_loop
 from .downloader import probe_media
@@ -329,6 +330,10 @@ async def on_lang_pick(u: Update, c: ContextTypes.DEFAULT_TYPE):
             else:
                 await _github_show_releases(q.edit_message_text, u.effective_chat.id, url, lang)
             return
+    if url and _gplay.is_play_store(url):
+        if _gplay.extract_package(url):
+            await _enqueue_direct(q, u.effective_chat.id, u.effective_user.id, url, lang, "gplay"); return
+        await q.edit_message_text(t(lang, "gplay_not_found")); return
     if url and classify_url(url) == "file":
         await _enqueue_direct(q, u.effective_chat.id, u.effective_user.id, url, lang, "best"); return
     if url and not is_spotify(url) and not is_apple_music(url) and not ig_profile_username(url) and not is_ig_story(url):
@@ -463,6 +468,10 @@ async def on_message(u: Update, c: ContextTypes.DEFAULT_TYPE, _url=None):
             else:
                 await _github_show_releases(msg.edit_text, u.effective_chat.id, url, lang)
             return
+    if _gplay.is_play_store(url):
+        if _gplay.extract_package(url):
+            await _direct_message(u, url, lang, "gplay"); return
+        await u.message.reply_text(t(lang, "gplay_not_found")); return
     if classify_url(url) == "file":
         await _direct_message(u, url, lang, "best"); return
     default_fmt = db.get_default_fmt(u.effective_user.id)
