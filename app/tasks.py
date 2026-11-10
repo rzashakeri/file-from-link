@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 from . import db
 from .downloader import download, DownloadError, get_direct_url, resolve_stream_match
-from .sender import deliver, send_text, edit_text, send_document_file, copy_message, send_animation, tg
+from .sender import deliver, send_text, edit_text, edit_caption, send_document_file, copy_message, send_animation, tg
 from .widget import set_status
 from .gif import to_animation, to_gif, probe_video, CONVERT_MAX_SECONDS
 from .config import DOWNLOAD_DIR, TELEGRAM_LIMIT, JOB_TIMEOUT
@@ -60,10 +60,14 @@ def process_job(job_id: str, status_message_id: int | None = None):
                 buttons.append([{"text": tr(lang, "convert_to_gif"), "callback_data": f"togif:{job_id}"}])
         if status_message_id:
             if kind == "widget":
-                # The widget shows the done state; the buttons ride on the
-                # same message via editMessageReplyMarkup (a widget message
+                # The done widget is header + green bar only: no status
+                # line, no filename, and the URL caption (which identified
+                # the job while it was downloading) is cleared, so the
+                # finished view is clean. The buttons ride on the same
+                # message via editMessageReplyMarkup (a widget message
                 # keeps its markup separate from its chat state).
-                set_status(chat_id, status_message_id, kind, "done", tr(lang, "done", title=meta.get("title","")), 100)
+                set_status(chat_id, status_message_id, kind, "done", tr(lang, "done_widget"), 100)
+                edit_caption(chat_id, status_message_id, "")
                 try: tg("editMessageReplyMarkup", chat_id=chat_id, message_id=status_message_id, reply_markup=json.dumps({"inline_keyboard": buttons}))
                 except Exception: pass
             else:

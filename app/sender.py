@@ -24,6 +24,12 @@ def edit_text(chat_id, message_id, text, reply_markup=None):
     if reply_markup is not None: kw["reply_markup"] = json.dumps(reply_markup)
     try: return tg("editMessageText", chat_id=chat_id, message_id=message_id, text=text, **kw)
     except Exception: return None
+def edit_caption(chat_id, message_id, caption=""):
+    """Replace a message caption (empty string clears it). Used to drop
+    the URL caption off a done widget — the done view is header + bar
+    only. Never raises."""
+    try: return tg("editMessageCaption", chat_id=chat_id, message_id=message_id, caption=caption)
+    except Exception: return None
 def _probe_video(path: Path) -> dict:
     """Real width/height/duration via ffprobe — without these Telegram
     guesses the aspect ratio and clips look stretched or boxed."""

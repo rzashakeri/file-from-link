@@ -40,8 +40,8 @@ def test_html_size_limits():
     # The server checks the same numbers; a local zlib check guards them.
     assert len(zlib.compress(w.HTML.encode("utf-8"), 9)) == comp
     for needle in ("TelegramWidget", "chatData", "chatDataChanged", "JSON.parse",
-                   'id="n"', "padding:12px 14px", 's.s==="done"',
-                   'indexOf(": ")', 'indexOf("：")'):
+                   "padding:12px 14px", 's.s==="done"', "#34c759",
+                   "height:16px", "fontWeight"):
         assert needle in w.HTML, needle
 
 def test_encode_state_roundtrip_and_clamp():
@@ -130,6 +130,26 @@ def test_set_status_routes_by_kind_and_never_raises():
         w.set_status(1, 11, "text", "failed", "err")
     finally:
         w.update_widget, w.edit_text = old_upd, old_edit
+
+def test_edit_caption_clears_and_never_raises():
+    from app import sender
+    calls = []
+    def fake_tg(method, **kw):
+        calls.append((method, kw))
+        return {"ok": True}
+    old = sender.tg
+    sender.tg = fake_tg
+    try:
+        assert sender.edit_caption(123, 777, "") == {"ok": True}
+        assert calls[0] == ("editMessageCaption",
+                            {"chat_id": 123, "message_id": 777, "caption": ""})
+    finally:
+        sender.tg = old
+    sender.tg = lambda method, **kw: (_ for _ in ()).throw(Exception("gone"))
+    try:
+        assert sender.edit_caption(123, 777, "") is None
+    finally:
+        sender.tg = old
 
 def test_db_status_kind_roundtrip():
     _reset_db()

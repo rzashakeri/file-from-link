@@ -18,7 +18,7 @@ def test_language_labels_are_localized():
 def test_placeholders_format():
     for lang in STRINGS:
         t(lang, "queued", pos=2, jid="abc"); t(lang, "quality_question", url="https://x")
-        t(lang, "downloading", pct=42); t(lang, "done", title="v"); t(lang, "failed", error="e")
+        t(lang, "downloading", pct=42); t(lang, "done", title="v"); t(lang, "done_widget"); t(lang, "failed", error="e")
         t(lang, "too_big", title="v", mb=80, hours=24, url="https://l")
         t(lang, "direct_link", url="https://l")
         t(lang, "gh_releases", repo="o/r"); t(lang, "gh_assets", tag="v1.3.1")

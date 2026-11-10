@@ -31,12 +31,13 @@ Layout notes (2026-11-10, from the Telegram widgets guide):
   so the body carries its own padding (12px 14px) and the bar never
   touches the bubble edges.
 - Height is automatic (sendWidget ``height: 0``): the bubble takes the
-  content height, so nothing clips when the filename wraps. A fixed
-  height would clip it.
-- In the done state the line is "✅ <word>: <title>" in every language
-  (": " separator, "：" in Chinese). The widget splits it at render
-  time: the status stays on its own line and the filename goes in a
-  padded box (#n) of its own, so it never sticks to the status text.
+  content height, so nothing clips. A fixed height would clip it.
+- Done state (2026-11-10, owner's call): the widget is a styled header
+  ("done_widget" line, bold 17px green) over a thick green bar — no
+  status line, no filename, and the bot clears the URL caption at done
+  (the caption stays while the job runs, so the user can tell which
+  link a widget belongs to). Direct style writes are used for the
+  done look: the sandbox profile already allows style.* writes.
   Old widget messages keep the old layout — HTML is fixed at send.
 """
 import json, zlib
@@ -50,12 +51,10 @@ MAX_STATE_BYTES = 1024
 HTML = """<style>
 body{margin:0;padding:12px 14px}
 #l{white-space:pre-line}
-#n{display:none;margin-top:10px;padding:8px 10px;background:var(--tg-theme-secondary-bg-color);border-radius:8px;word-break:break-word}
-#b{height:10px;border-radius:5px;background:var(--tg-theme-secondary-bg-color);overflow:hidden;margin-top:10px;display:none}
+#b{height:16px;border-radius:8px;background:var(--tg-theme-secondary-bg-color);overflow:hidden;margin-top:10px;display:none}
 #f{height:100%;width:0;background:var(--tg-theme-button-color)}
 </style>
 <div id="l"></div>
-<div id="n"></div>
 <div id="b"><div id="f"></div></div>
 <script>
 var W=window.TelegramWidget||{chatData:null,onEvent:function(){}};
@@ -63,16 +62,11 @@ if(typeof W.ready==="function")W.ready();
 function r(){
   var s={};
   try{s=JSON.parse(W.chatData||"{}")}catch(e){}
-  var line=s.l||"",name="";
-  if(s.s==="done"){
-    var i=line.indexOf(": "),sep=2;
-    if(i<0){i=line.indexOf("：");sep=1}
-    if(i>=0){name=line.slice(i+sep).trim();line=line.slice(0,i+1)}
-  }
-  document.getElementById("l").textContent=line;
-  var n=document.getElementById("n");
-  if(name){n.style.display="block";n.textContent=name}else{n.style.display="none"}
-  var b=document.getElementById("b"),f=document.getElementById("f");
+  var l=document.getElementById("l"),b=document.getElementById("b"),f=document.getElementById("f");
+  l.textContent=s.l||"";
+  var done=s.s==="done";
+  if(done){l.style.fontWeight="700";l.style.fontSize="17px";l.style.color="#34c759";f.style.background="#34c759"}
+  else{l.style.fontWeight="";l.style.fontSize="";l.style.color="";f.style.background=""}
   if(s.p==null){b.style.display="none"}
   else{b.style.display="block";f.style.width=Math.max(0,Math.min(100,s.p))+"%"}
 }
