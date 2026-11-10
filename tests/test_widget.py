@@ -39,7 +39,9 @@ def test_html_size_limits():
     assert comp <= w.MAX_HTML_COMPRESSED, f"compressed {comp}"
     # The server checks the same numbers; a local zlib check guards them.
     assert len(zlib.compress(w.HTML.encode("utf-8"), 9)) == comp
-    for needle in ("TelegramWidget", "chatData", "chatDataChanged", "JSON.parse"):
+    for needle in ("TelegramWidget", "chatData", "chatDataChanged", "JSON.parse",
+                   'id="n"', "padding:12px 14px", 's.s==="done"',
+                   'indexOf(": ")', 'indexOf("：")'):
         assert needle in w.HTML, needle
 
 def test_encode_state_roundtrip_and_clamp():
@@ -76,6 +78,7 @@ def test_send_widget_success_and_failure():
         method, kw = calls[0]
         assert method == "sendWidget"
         assert kw["chat_id"] == 123 and kw["html"] == w.HTML
+        assert kw["height"] == 0  # automatic: bubble takes content height
         assert json.loads(kw["chat_data"])["s"] == "adding"
         assert kw["caption"] == "https://example.com/x"
         assert json.loads(kw["reply_parameters"]) == {"message_id": 55}

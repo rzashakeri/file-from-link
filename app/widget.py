@@ -25,6 +25,19 @@ Limits enforced by Telegram (and asserted in tests):
   adding|queued|downloading|uploading|done|failed, ``line`` is the
   pre-rendered i18n text (all localisation stays in Python) and ``p``
   is a 0-100 progress percent (bar hidden when absent).
+
+Layout notes (2026-11-10, from the Telegram widgets guide):
+- The widget fills the bubble; ``body{margin:0}`` goes edge to edge,
+  so the body carries its own padding (12px 14px) and the bar never
+  touches the bubble edges.
+- Height is automatic (sendWidget ``height: 0``): the bubble takes the
+  content height, so nothing clips when the filename wraps. A fixed
+  height would clip it.
+- In the done state the line is "✅ <word>: <title>" in every language
+  (": " separator, "：" in Chinese). The widget splits it at render
+  time: the status stays on its own line and the filename goes in a
+  padded box (#n) of its own, so it never sticks to the status text.
+  Old widget messages keep the old layout — HTML is fixed at send.
 """
 import json, zlib
 
@@ -35,12 +48,14 @@ MAX_HTML_COMPRESSED = 4096
 MAX_STATE_BYTES = 1024
 
 HTML = """<style>
-body{margin:0}
+body{margin:0;padding:12px 14px}
 #l{white-space:pre-line}
-#b{height:10px;border-radius:5px;background:var(--tg-theme-secondary-bg-color);overflow:hidden;margin-top:6px;display:none}
+#n{display:none;margin-top:10px;padding:8px 10px;background:var(--tg-theme-secondary-bg-color);border-radius:8px;word-break:break-word}
+#b{height:10px;border-radius:5px;background:var(--tg-theme-secondary-bg-color);overflow:hidden;margin-top:10px;display:none}
 #f{height:100%;width:0;background:var(--tg-theme-button-color)}
 </style>
 <div id="l"></div>
+<div id="n"></div>
 <div id="b"><div id="f"></div></div>
 <script>
 var W=window.TelegramWidget||{chatData:null,onEvent:function(){}};
@@ -48,7 +63,15 @@ if(typeof W.ready==="function")W.ready();
 function r(){
   var s={};
   try{s=JSON.parse(W.chatData||"{}")}catch(e){}
-  document.getElementById("l").textContent=s.l||"";
+  var line=s.l||"",name="";
+  if(s.s==="done"){
+    var i=line.indexOf(": "),sep=2;
+    if(i<0){i=line.indexOf("：");sep=1}
+    if(i>=0){name=line.slice(i+sep).trim();line=line.slice(0,i+1)}
+  }
+  document.getElementById("l").textContent=line;
+  var n=document.getElementById("n");
+  if(name){n.style.display="block";n.textContent=name}else{n.style.display="none"}
   var b=document.getElementById("b"),f=document.getElementById("f");
   if(s.p==null){b.style.display="none"}
   else{b.style.display="block";f.style.width=Math.max(0,Math.min(100,s.p))+"%"}
@@ -92,8 +115,10 @@ def send_widget(chat_id: int, state: str, caption: str = "", reply_to: int | Non
     failure — the caller falls back to the plain text status message."""
     try:
         check_html()
-        kw: dict = {"chat_id": chat_id, "html": HTML, "height": 110,
-                    "chat_data": state}  # allow_queries omitted (= False): v1 is display-only
+        kw: dict = {"chat_id": chat_id, "html": HTML, "height": 0,
+                    "chat_data": state}  # height 0 = automatic: the bubble
+        # takes the content height, so the filename box never clips when
+        # it wraps; allow_queries omitted (= False): v1 is display-only
         if caption:
             kw["caption"] = caption[:200]
         if reply_to:
