@@ -15,14 +15,19 @@ Policy (keeps Telegram edit-rate limits far away):
   it owns the message (downloading/uploading/done).
 - Deleted-message and not-modified errors are swallowed, never crash the
   loop; a deleted message is dropped from tracking.
+- Widget jobs (status_kind='widget') are updated with
+  editMessageWidgetData instead of a text edit — the widget redraws in
+  place, so the loop's throttling above still applies.
 
 Deliberately free of any telegram import so it stays unit-testable: the
 bot object only needs an async edit_message_text(chat_id, message_id,
-text) method, which the real PTB Bot provides.
+text) method, which the real PTB Bot provides. The widget update is a
+plain sync HTTP call via sender.tg, likewise testable with a stub.
 """
 import asyncio, logging, time
 from . import db
 from .i18n import t as tr
+from .widget import encode_state, update_widget
 
 TICK_SECONDS = 60
 MIN_DROP = 5
@@ -67,7 +72,12 @@ async def refresh_once(bot, shown):
             continue
         text = tr(job.get("lang") or "en", "queued", pos=pos, jid=jid)
         try:
-            await bot.edit_message_text(chat_id=job["chat_id"], message_id=job["status_message_id"], text=text)
+            if (job.get("status_kind") or "text") == "widget":
+                if not update_widget(job["chat_id"], job["status_message_id"], encode_state("queued", text)):
+                    log.info("position refresh: widget update failed for %s", jid)
+                    continue
+            else:
+                await bot.edit_message_text(chat_id=job["chat_id"], message_id=job["status_message_id"], text=text)
             shown[jid] = (pos, now)
             edited += 1
         except Exception as e:

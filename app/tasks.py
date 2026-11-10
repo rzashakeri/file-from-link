@@ -1,9 +1,11 @@
+import json
 import logging
 import shutil
 from pathlib import Path
 from . import db
 from .downloader import download, DownloadError, get_direct_url, resolve_stream_match
-from .sender import deliver, send_text, edit_text, send_document_file, copy_message, send_animation
+from .sender import deliver, send_text, edit_text, send_document_file, copy_message, send_animation, tg
+from .widget import set_status
 from .gif import to_animation, to_gif, probe_video, CONVERT_MAX_SECONDS
 from .config import DOWNLOAD_DIR, TELEGRAM_LIMIT, JOB_TIMEOUT
 from .i18n import t as tr
@@ -15,6 +17,8 @@ def process_job(job_id: str, status_message_id: int | None = None):
     job = db.get_job(job_id)
     if not job: return
     chat_id, fmt = job["chat_id"], job["fmt"]; lang = job.get("lang") or "en"
+    status_message_id = status_message_id or job.get("status_message_id")
+    kind = job.get("status_kind") or "text"
     try:
         db.update_job(job_id, status="downloading")
         last = {"pct": -10}
@@ -23,10 +27,10 @@ def process_job(job_id: str, status_message_id: int | None = None):
                 pct = int(done*100/total)
                 if pct - last["pct"] >= 10:
                     last["pct"] = pct
-                    if status_message_id: edit_text(chat_id, status_message_id, tr(lang, "downloading", pct=pct))
+                    if status_message_id: set_status(chat_id, status_message_id, kind, "downloading", tr(lang, "downloading", pct=pct), pct)
         url = job["url"]
         if is_spotify(url) or is_apple_music(url):
-            if status_message_id: edit_text(chat_id, status_message_id, tr(lang, "matching"))
+            if status_message_id: set_status(chat_id, status_message_id, kind, "downloading", tr(lang, "matching"))
             url = resolve_stream_match(url)
         path, meta = download(url, fmt, job_id, prog, lang)
         if fmt == "gif":
@@ -35,7 +39,7 @@ def process_job(job_id: str, status_message_id: int | None = None):
         elif fmt == "togif":
             path = to_gif(path, job_id)  # no fallback: a failed conversion must fail the job, not silently deliver a video
         db.update_job(job_id, status="uploading", title=meta.get("title",""), filepath=str(path), filesize=path.stat().st_size)
-        if status_message_id: edit_text(chat_id, status_message_id, tr(lang, "uploading"))
+        if status_message_id: set_status(chat_id, status_message_id, kind, "uploading", tr(lang, "uploading"))
         if fmt in ("gif", "togif") and path.suffix.lower() in (".mp4", ".gif") and path.stat().st_size <= TELEGRAM_LIMIT:
             send_animation(chat_id, path, f"{meta.get('title','')}\n{tr(lang, 'footer')}"[:1000])
         else:
@@ -54,18 +58,34 @@ def process_job(job_id: str, status_message_id: int | None = None):
             has_video, dur = probe_video(path)
             if has_video and dur is not None and dur < CONVERT_MAX_SECONDS:
                 buttons.append([{"text": tr(lang, "convert_to_gif"), "callback_data": f"togif:{job_id}"}])
-        if status_message_id: edit_text(chat_id, status_message_id, tr(lang, "done", title=meta.get("title","")), reply_markup={"inline_keyboard": buttons})
+        if status_message_id:
+            if kind == "widget":
+                # The widget shows the done state; the buttons ride on the
+                # same message via editMessageReplyMarkup (a widget message
+                # keeps its markup separate from its chat state).
+                set_status(chat_id, status_message_id, kind, "done", tr(lang, "done", title=meta.get("title","")), 100)
+                try: tg("editMessageReplyMarkup", chat_id=chat_id, message_id=status_message_id, reply_markup=json.dumps({"inline_keyboard": buttons}))
+                except Exception: pass
+            else:
+                edit_text(chat_id, status_message_id, tr(lang, "done", title=meta.get("title","")), reply_markup={"inline_keyboard": buttons})
     except DownloadError as e:
         db.update_job(job_id, status="failed", error=str(e))
+        if status_message_id and kind == "widget": set_status(chat_id, status_message_id, kind, "failed", tr(lang, "failed", error=str(e)))
         send_text(chat_id, tr(lang, "failed", error=str(e)))
     except Exception as e:
         db.update_job(job_id, status="failed", error=str(e)[:500])
+        if status_message_id and kind == "widget": set_status(chat_id, status_message_id, kind, "failed", tr(lang, "failed_generic"))
         send_text(chat_id, tr(lang, "failed_generic"))
     finally:
         shutil.rmtree(DOWNLOAD_DIR/job_id, ignore_errors=True)
 
 def _fail_and_notify(job, reason):
     try: db.update_job(job["id"], status="failed", error=reason[:500])
+    except Exception: pass
+    try:
+        mid, kind = job.get("status_message_id"), job.get("status_kind") or "text"
+        if mid and kind == "widget":
+            set_status(job["chat_id"], mid, kind, "failed", tr(job.get("lang") or "en", "failed_generic"))
     except Exception: pass
     try: send_text(job["chat_id"], tr(job.get("lang") or "en", "failed_generic"))
     except Exception: pass

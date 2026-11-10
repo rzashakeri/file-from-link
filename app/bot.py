@@ -19,6 +19,7 @@ from . import gplay as _gplay
 from .i18n import LANGUAGES, t, fmt_label
 from .position_updates import position_loop
 from .downloader import probe_media
+from .widget import encode_state, send_widget, update_widget
 from .ig import fetch_profile_pic
 logging.basicConfig(level=logging.INFO)
 PENDING: dict[int, str] = {}
@@ -28,19 +29,68 @@ def _is_x(url: str) -> bool:
     return "x.com" in url or "twitter.com" in url
 async def _enqueue_direct(q, chat_id, user_id, url, lang, fmt="best"):
     """Non-YouTube links skip the picker: straight to the download."""
-    msg = await q.edit_message_text(t(lang, "direct_start"))
+    st = await _status_from_query(q, lang, url, "direct_start")
     try:
-        jid, pos = enqueue(chat_id, user_id, url, fmt, msg.message_id, lang)
-        await q.edit_message_text(t(lang, "queued", pos=pos, jid=jid))
+        jid, pos = enqueue(chat_id, user_id, url, fmt, st.message_id, lang, status_kind=st.kind)
+        await st.set_queued(lang, pos, jid)
     except QueueFull:
-        await q.edit_message_text(t(lang, "queue_full"))
+        await st.set_text(lang, "queue_full")
 async def _direct_message(u, url, lang, fmt="best"):
-    msg = await u.message.reply_text(t(lang, "direct_start"))
+    st = await _status_reply(u.message, lang, url, "direct_start")
     try:
-        jid, pos = enqueue(u.effective_chat.id, u.effective_user.id, url, fmt, msg.message_id, lang)
-        await msg.edit_text(t(lang, "queued", pos=pos, jid=jid))
+        jid, pos = enqueue(u.effective_chat.id, u.effective_user.id, url, fmt, st.message_id, lang, status_kind=st.kind)
+        await st.set_queued(lang, pos, jid)
     except QueueFull:
-        await msg.edit_text(t(lang, "queue_full"))
+        await st.set_text(lang, "queue_full")
+class _Status:
+    """A job's status display: a live widget in private chats, the plain
+    text message everywhere else (or when the widget send fails).
+
+    Created BEFORE enqueue (the widget with an "adding" state, or the
+    text placeholder); ``set_queued`` then fills in the real position.
+    ``kind`` is stored on the job row so the worker and the position
+    loop update the same display."""
+    def __init__(self, chat_id, message_id, kind, ptb_msg=None):
+        self.chat_id = chat_id
+        self.message_id = message_id
+        self.kind = kind
+        self._ptb_msg = ptb_msg
+    async def set_queued(self, lang, pos, jid):
+        text = t(lang, "queued", pos=pos, jid=jid)
+        if self.kind == "widget":
+            update_widget(self.chat_id, self.message_id, encode_state("queued", text))
+        elif self._ptb_msg is not None:
+            await self._ptb_msg.edit_text(text)
+    async def set_text(self, lang, key, **kw):
+        text = t(lang, key, **kw)
+        if self.kind == "widget":
+            update_widget(self.chat_id, self.message_id, encode_state("failed", text))
+        elif self._ptb_msg is not None:
+            await self._ptb_msg.edit_text(text)
+async def _status_from_query(q, lang, url, placeholder="queued_adding"):
+    """Status display for a callback flow, where the picker message is the
+    current display. Private chat: send the widget and delete the picker
+    on success. Otherwise (or on any failure): edit the picker to the
+    placeholder text, exactly like before."""
+    line = t(lang, placeholder)
+    if q.message.chat.type == "private":
+        mid = send_widget(q.message.chat_id, encode_state("adding", line), caption=url)
+        if mid:
+            try: await q.delete_message()
+            except Exception: pass
+            return _Status(q.message.chat_id, mid, "widget")
+    msg = await q.edit_message_text(line)
+    return _Status(q.message.chat_id, msg.message_id, "text", q.message)
+async def _status_reply(msg, lang, url, placeholder="queued_adding"):
+    """Status display as a new reply to ``msg``. Private chat: the widget
+    as a reply to that message; otherwise the classic text reply."""
+    line = t(lang, placeholder)
+    if msg.chat.type == "private":
+        mid = send_widget(msg.chat_id, encode_state("adding", line), caption=url, reply_to=msg.message_id)
+        if mid:
+            return _Status(msg.chat_id, mid, "widget")
+    m = await msg.reply_text(line)
+    return _Status(msg.chat_id, m.message_id, "text", m)
 async def _send_profile_pic(u, username, lang):
     msg = await u.message.reply_text(t(lang, "fetching_pic"))
     try:
@@ -339,12 +389,12 @@ async def on_lang_pick(u: Update, c: ContextTypes.DEFAULT_TYPE):
     if url and not is_spotify(url) and not is_apple_music(url) and not ig_profile_username(url) and not is_ig_story(url):
         default_fmt = db.get_default_fmt(u.effective_user.id)
         if default_fmt:
-            msg = await q.edit_message_text(t(lang, "queued_adding"))
+            st = await _status_from_query(q, lang, url)
             try:
-                jid, pos = enqueue(u.effective_chat.id, u.effective_user.id, url, default_fmt, msg.message_id, lang)
-                await q.edit_message_text(t(lang, "queued", pos=pos, jid=jid))
+                jid, pos = enqueue(u.effective_chat.id, u.effective_user.id, url, default_fmt, st.message_id, lang, status_kind=st.kind)
+                await st.set_queued(lang, pos, jid)
             except QueueFull:
-                await q.edit_message_text(t(lang, "queue_full"))
+                await st.set_text(lang, "queue_full")
         else:
             PENDING[u.effective_chat.id] = url
             await q.edit_message_text(t(lang, "probing"))
@@ -434,12 +484,12 @@ async def on_gh_asset(u: Update, c: ContextTypes.DEFAULT_TYPE):
     if idx < 0 or idx >= len(st["assets"]):
         await q.edit_message_text(t(lang, "expired")); return
     asset = st["assets"][idx]
-    msg = await q.edit_message_text(t(lang, "queued_adding"))
+    st = await _status_from_query(q, lang, asset["url"])
     try:
-        jid, pos = enqueue(u.effective_chat.id, u.effective_user.id, asset["url"], "ghfile", msg.message_id, lang)
-        await q.edit_message_text(t(lang, "queued", pos=pos, jid=jid))
+        jid, pos = enqueue(u.effective_chat.id, u.effective_user.id, asset["url"], "ghfile", st.message_id, lang, status_kind=st.kind)
+        await st.set_queued(lang, pos, jid)
     except QueueFull:
-        await q.edit_message_text(t(lang, "queue_full"))
+        await st.set_text(lang, "queue_full")
 async def on_message(u: Update, c: ContextTypes.DEFAULT_TYPE, _url=None):
     urls = [_url] if _url else extract_urls(u.message.text or "")
     lang = lang_of(u)
@@ -476,12 +526,12 @@ async def on_message(u: Update, c: ContextTypes.DEFAULT_TYPE, _url=None):
         await _direct_message(u, url, lang, "best"); return
     default_fmt = db.get_default_fmt(u.effective_user.id)
     if default_fmt:
-        msg = await u.message.reply_text(t(lang, "queued_adding"))
+        st = await _status_reply(u.message, lang, url)
         try:
-            jid, pos = enqueue(u.effective_chat.id, u.effective_user.id, url, default_fmt, msg.message_id, lang)
-            await msg.edit_text(t(lang, "queued", pos=pos, jid=jid))
+            jid, pos = enqueue(u.effective_chat.id, u.effective_user.id, url, default_fmt, st.message_id, lang, status_kind=st.kind)
+            await st.set_queued(lang, pos, jid)
         except QueueFull:
-            await msg.edit_text(t(lang, "queue_full"))
+            await st.set_text(lang, "queue_full")
         return
     PENDING[u.effective_chat.id] = url
     msg = await u.message.reply_text(t(lang, "probing"))
@@ -495,12 +545,12 @@ async def on_pick(u: Update, c: ContextTypes.DEFAULT_TYPE):
     url = PENDING.pop(u.effective_chat.id, None)
     if not url: await q.edit_message_text(t(lang, "expired")); return
     fmt = q.data.split(":", 1)[1]
-    msg = await q.edit_message_text(t(lang, "queued_adding"))
+    st = await _status_from_query(q, lang, url)
     try:
-        jid, pos = enqueue(u.effective_chat.id, u.effective_user.id, url, fmt, msg.message_id, lang)
-        await q.edit_message_text(t(lang, "queued", pos=pos, jid=jid))
+        jid, pos = enqueue(u.effective_chat.id, u.effective_user.id, url, fmt, st.message_id, lang, status_kind=st.kind)
+        await st.set_queued(lang, pos, jid)
     except QueueFull:
-        await q.edit_message_text(t(lang, "queue_full"))
+        await st.set_text(lang, "queue_full")
 async def on_inline_query(u: Update, c: ContextTypes.DEFAULT_TYPE):
     """Inline funnel: answer fast with a button that opens the bot, never a
     download. Telegram only waits seconds for an inline answer and a
@@ -537,12 +587,12 @@ async def on_togif(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "settings_button"), callback_data="set:open"), InlineKeyboardButton(t(lang, "language_button"), callback_data="langmenu")]]))
     except Exception:
         pass
-    msg = await q.message.reply_text(t(lang, "queued_adding"))
+    st = await _status_reply(q.message, lang, job["url"])
     try:
-        jid, pos = enqueue(u.effective_chat.id, u.effective_user.id, job["url"], "togif", msg.message_id, lang)
-        await msg.edit_text(t(lang, "queued", pos=pos, jid=jid))
+        jid, pos = enqueue(u.effective_chat.id, u.effective_user.id, job["url"], "togif", st.message_id, lang, status_kind=st.kind)
+        await st.set_queued(lang, pos, jid)
     except QueueFull:
-        await msg.edit_text(t(lang, "queue_full"))
+        await st.set_text(lang, "queue_full")
 DEBUG_LOG = "/data/updates.log"
 def _dbg(rec):
     try:

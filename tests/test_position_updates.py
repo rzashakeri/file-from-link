@@ -5,6 +5,17 @@ os.environ["DOWNLOAD_DIR"] = os.path.join(_tmp, "downloads")
 os.environ["PUBLIC_DIR"] = os.path.join(_tmp, "public")
 os.environ.setdefault("BOT_TOKEN", "dummy")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# System python has no httpx (it lives in the ytdlp venv); position_updates
+# now reaches sender through widget, so stub it like test_gplay stubs gplaydl.
+import types
+_fake_httpx = types.ModuleType("httpx")
+class _FakeClient:
+    def __init__(self, *a, **k): pass
+    def __enter__(self): return self
+    def __exit__(self, *a): pass
+    def post(self, *a, **k): raise RuntimeError("no network in tests")
+_fake_httpx.Client = _FakeClient
+sys.modules.setdefault("httpx", _fake_httpx)
 import time as _real_time
 from app import db
 import app.position_updates as pu

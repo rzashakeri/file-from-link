@@ -15,6 +15,8 @@ def init():
             con.execute("ALTER TABLE jobs ADD COLUMN lang TEXT DEFAULT 'en'")
         if "status_message_id" not in cols:
             con.execute("ALTER TABLE jobs ADD COLUMN status_message_id INTEGER")
+        if "status_kind" not in cols:
+            con.execute("ALTER TABLE jobs ADD COLUMN status_kind TEXT DEFAULT 'text'")
         ucols = [r[1] for r in con.execute("PRAGMA table_info(users)")]
         if "default_fmt" not in ucols:
             con.execute("ALTER TABLE users ADD COLUMN default_fmt TEXT")
@@ -22,11 +24,11 @@ def init():
         con.execute("""CREATE TABLE IF NOT EXISTS inline_tokens(
           token TEXT PRIMARY KEY, url TEXT, created REAL)""")
 init()
-def create_job(chat_id, user_id, url, fmt, lang="en", status_message_id=None):
+def create_job(chat_id, user_id, url, fmt, lang="en", status_message_id=None, status_kind="text"):
     jid = uuid.uuid4().hex[:12]; now = time.time()
     with _c() as con:
-        con.execute("INSERT INTO jobs (id,chat_id,user_id,url,fmt,status,created,updated,lang,status_message_id) VALUES (?,?,?,?,?,'queued',?,?,?,?)",
-                    (jid, chat_id, user_id, url, fmt, now, now, lang, status_message_id))
+        con.execute("INSERT INTO jobs (id,chat_id,user_id,url,fmt,status,created,updated,lang,status_message_id,status_kind) VALUES (?,?,?,?,?,'queued',?,?,?,?,?)",
+                    (jid, chat_id, user_id, url, fmt, now, now, lang, status_message_id, status_kind))
     return jid
 def get_lang(user_id):
     with _c() as con:
@@ -67,7 +69,7 @@ def queue_position(jid):
 def queued_jobs_with_status_msg():
     """Jobs still waiting whose queue message can be live-updated."""
     with _c() as con:
-        rows = con.execute("SELECT id, chat_id, lang, status_message_id FROM jobs WHERE status='queued' AND status_message_id IS NOT NULL").fetchall()
+        rows = con.execute("SELECT id, chat_id, lang, status_message_id, status_kind FROM jobs WHERE status='queued' AND status_message_id IS NOT NULL").fetchall()
     return [dict(r) for r in rows]
 def stale_active_jobs(max_age_seconds):
     """Jobs stuck in downloading/uploading whose last update is older than max_age."""
