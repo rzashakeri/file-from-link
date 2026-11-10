@@ -32,7 +32,10 @@ services:
       API_URL: "http://cobalt:9000"
       API_AUTH_REQUIRED: "0"
   bot-api:
-    # Local Telegram Bot API server (aiogram/telegram-bot-api:10.4).
+    # Local Telegram Bot API server (aiogram/telegram-bot-api:10.4-linuxamd64).
+    # NOTE: there is NO plain `10.4` tag on Docker Hub (deploy 2026-11-10
+    # failed resolving it) — 10.4 ships only arch tags so far, and the
+    # EC2 host is x86_64, so pin the linuxamd64 one.
     # Profile-gated: a plain `docker compose up -d --build` never starts
     # it, so normal deploys stay safe until TELEGRAM_API_ID/HASH exist.
     # Start it with: docker compose --profile local-api up -d bot-api
@@ -43,7 +46,7 @@ services:
     # still enforces the 50MB cloud limit. No depends_on from bot/workers:
     # a profiled dependency would break plain deploys; start bot-api
     # BEFORE restarting bot/workers (see deploy order in the checklist).
-    image: aiogram/telegram-bot-api:10.4
+    image: aiogram/telegram-bot-api:10.4-linuxamd64
     profiles: ["local-api"]
     restart: unless-stopped
     environment:
