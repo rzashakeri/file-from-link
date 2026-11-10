@@ -1,0 +1,2 @@
+# File From Link daily backup: 00:00 Tehran = 20:30 UTC (Iran has no DST).
+30 20 * * * root cd /opt/file-from-link && /bin/bash ops/daily_backup.sh >> /var/log/ffl-backup.log 2>&1
