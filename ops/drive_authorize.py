@@ -13,13 +13,17 @@ the second needs an authorization code from the user:
   in the file-from-link-backup Cloud project; redirect http://localhost:8080).
 - Token file: /opt/ffl-secrets/drive-user-token.json (mode 600), the
   authorized-user file ops/drive_upload.py reads (refresh token inside).
-- PKCE verifier: /opt/ffl-secrets/drive-pkce-verifier.txt (mode 600).
-  google-auth-oauthlib auto-generates a PKCE code verifier when building
-  the authorization URL and keeps it only in that process's memory, but
-  --auth-url and --code run as separate processes — so --auth-url saves
-  the verifier to this file and --code reads it back and passes it to
-  fetch_token. Without it Google rejects the exchange with
-  "Missing code verifier" and the one-time code is spent.
+- PKCE verifier + challenge: /opt/ffl-secrets/drive-pkce-verifier.txt and
+  /opt/ffl-secrets/drive-pkce-challenge.txt (mode 600). --auth-url and
+  --code run as separate processes, so the verifier must survive on disk
+  between them. This script generates the verifier itself (never the
+  library's implicit one) and passes verifier + S256 challenge explicitly
+  to the flow; --code recomputes the challenge from the saved verifier and
+  refuses to call fetch_token when they disagree, so a stale or mismatched
+  verifier can never burn a one-time code. (History: the first version
+  relied on the library's in-memory verifier — "Missing code verifier";
+  the second saved the library's verifier but the exchange still failed
+  with "Invalid code verifier", so the verifier is now fully owned here.)
 - The user opens the URL, signs in as rzashakeri@gmail.com, authorizes the
   drive.file scope, and copies the code from the redirect URL — the
   localhost page itself will not load, the code is in the address bar.
@@ -30,8 +34,11 @@ the second needs an authorization code from the user:
 
 Requires google-auth-oauthlib in /opt/ffl-drive/venv.
 """
+import base64
+import hashlib
 import json
 import os
+import secrets
 import sys
 from pathlib import Path
 
@@ -41,6 +48,8 @@ TOKEN_PATH = Path(os.environ.get(
     "FFL_DRIVE_USER_TOKEN", "/opt/ffl-secrets/drive-user-token.json"))
 VERIFIER_PATH = Path(os.environ.get(
     "FFL_DRIVE_PKCE_VERIFIER", "/opt/ffl-secrets/drive-pkce-verifier.txt"))
+CHALLENGE_PATH = Path(os.environ.get(
+    "FFL_DRIVE_PKCE_CHALLENGE", "/opt/ffl-secrets/drive-pkce-challenge.txt"))
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 REDIRECT_URI = "http://localhost:8080/"
 
@@ -66,31 +75,65 @@ def make_flow(cfg, code_verifier=None):
     return flow
 
 
+def new_verifier() -> str:
+    # 86 URL-safe chars, inside PKCE's 43-128 range.
+    return secrets.token_urlsafe(64)
+
+
+def code_challenge(verifier: str) -> str:
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+def _save_secret(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(value)
+    os.chmod(path, 0o600)
+
+
+def _load_secret(path: Path, what: str) -> str:
+    if not path.exists():
+        raise FileNotFoundError(
+            f"no saved PKCE {what}: {path} — run --auth-url first")
+    return path.read_text().strip()
+
+
 def save_verifier(verifier: str) -> None:
-    VERIFIER_PATH.parent.mkdir(parents=True, exist_ok=True)
-    VERIFIER_PATH.write_text(verifier)
-    os.chmod(VERIFIER_PATH, 0o600)
+    _save_secret(VERIFIER_PATH, verifier)
 
 
 def load_verifier() -> str:
-    if not VERIFIER_PATH.exists():
-        raise FileNotFoundError(
-            f"no saved PKCE verifier: {VERIFIER_PATH} — run --auth-url first")
-    return VERIFIER_PATH.read_text().strip()
+    return _load_secret(VERIFIER_PATH, "verifier")
+
+
+def save_challenge(challenge: str) -> None:
+    _save_secret(CHALLENGE_PATH, challenge)
+
+
+def load_challenge() -> str:
+    return _load_secret(CHALLENGE_PATH, "challenge")
 
 
 def auth_url() -> str:
-    flow = make_flow(load_client_config())
-    url, _ = flow.authorization_url(prompt="consent", access_type="offline")
-    if not flow.code_verifier:
-        raise RuntimeError("no PKCE verifier generated for authorization URL")
-    save_verifier(flow.code_verifier)
+    verifier = new_verifier()
+    challenge = code_challenge(verifier)
+    flow = make_flow(load_client_config(), code_verifier=verifier)
+    url, _ = flow.authorization_url(
+        prompt="consent", access_type="offline",
+        code_challenge=challenge, code_challenge_method="S256")
+    save_verifier(verifier)
+    save_challenge(challenge)
     return url
 
 
 def exchange(code: str) -> Path:
     cfg = load_client_config()
-    flow = make_flow(cfg, code_verifier=load_verifier())
+    verifier = load_verifier()
+    if code_challenge(verifier) != load_challenge():
+        raise ValueError(
+            "saved PKCE verifier does not match the saved challenge — "
+            "run --auth-url again for a fresh URL (code NOT spent)")
+    flow = make_flow(cfg, code_verifier=verifier)
     flow.fetch_token(code=code)
     creds = flow.credentials
     token = {"client_id": cfg["client_id"],
@@ -107,14 +150,14 @@ def main(argv) -> int:
     if len(argv) == 2 and argv[1] == "--auth-url":
         try:
             print(auth_url())
-        except FileNotFoundError as e:
+        except (FileNotFoundError, ValueError) as e:
             print(str(e), file=sys.stderr)
             return 2
         return 0
     if len(argv) == 3 and argv[1] == "--code":
         try:
             path = exchange(argv[2])
-        except FileNotFoundError as e:
+        except (FileNotFoundError, ValueError) as e:
             print(str(e), file=sys.stderr)
             return 2
         print(f"TOKEN_SAVED={path}")

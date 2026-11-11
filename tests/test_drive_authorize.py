@@ -15,10 +15,9 @@ class _FakeFlow:
         self.redirect_uri = None
         self.code_verifier = code_verifier
         self.credentials = types.SimpleNamespace(refresh_token="refresh-xyz")
-    def authorization_url(self, prompt=None, access_type=None):
+    def authorization_url(self, prompt=None, access_type=None, **kwargs):
         self.store["auth_url_args"] = (prompt, access_type)
-        if self.code_verifier is None:
-            self.code_verifier = "auto-verifier-xyz"
+        self.store["auth_url_kwargs"] = kwargs
         return ("https://accounts.google.com/o/oauth2/auth?client_id=CLIENTID&x=1", None)
     def fetch_token(self, code=None, **kwargs):
         self.store["code"] = code
@@ -39,6 +38,16 @@ def _stub_oauthlib(store):
     sys.modules.update({"google_auth_oauthlib": pkg,
                         "google_auth_oauthlib.flow": flow_mod})
 
+def _setup_tmp(mod, store, tmp):
+    client = Path(tmp) / "client.json"
+    client.write_text(json.dumps(
+        {"client_id": "CLIENTID", "client_secret": "SECRET"}))
+    mod.CLIENT_PATH = client
+    mod.TOKEN_PATH = Path(tmp) / "token.json"
+    mod.VERIFIER_PATH = Path(tmp) / "verifier.txt"
+    mod.CHALLENGE_PATH = Path(tmp) / "challenge.txt"
+    return client
+
 def test_missing_client_config_returns_2():
     mod = _load("drive_authorize", "ops/drive_authorize.py")
     mod.CLIENT_PATH = Path("/nonexistent/oauth-client.json")
@@ -51,27 +60,26 @@ def test_exchange_without_verifier_returns_2():
     store = {}
     _stub_oauthlib(store)
     with tempfile.TemporaryDirectory() as tmp:
-        client = Path(tmp) / "client.json"
-        client.write_text(json.dumps(
-            {"client_id": "CLIENTID", "client_secret": "SECRET"}))
-        mod.CLIENT_PATH = client
-        mod.VERIFIER_PATH = Path(tmp) / "no-verifier.txt"
+        _setup_tmp(mod, store, tmp)
         assert mod.main(["drive_authorize.py", "--code", "abc"]) == 2
         assert "code" not in store
 
-def test_auth_url_saves_verifier_and_exchange_uses_it():
+def test_code_challenge_is_rfc7636_s256():
+    mod = _load("drive_authorize", "ops/drive_authorize.py")
+    # RFC 7636 Appendix B example
+    assert mod.code_challenge(
+        "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk") == (
+        "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
+    verifier = mod.new_verifier()
+    assert 43 <= len(verifier) <= 128
+    assert all(c.isalnum() or c in "-._~" for c in verifier)
+
+def test_auth_url_saves_verifier_and_challenge_and_exchange_uses_it():
     mod = _load("drive_authorize", "ops/drive_authorize.py")
     store = {}
     _stub_oauthlib(store)
     with tempfile.TemporaryDirectory() as tmp:
-        client = Path(tmp) / "client.json"
-        client.write_text(json.dumps(
-            {"client_id": "CLIENTID", "client_secret": "SECRET"}))
-        token = Path(tmp) / "token.json"
-        verifier = Path(tmp) / "verifier.txt"
-        mod.CLIENT_PATH = client
-        mod.TOKEN_PATH = token
-        mod.VERIFIER_PATH = verifier
+        _setup_tmp(mod, store, tmp)
         url = mod.auth_url()
         assert url.startswith("https://accounts.google.com/o/oauth2/auth")
         assert "CLIENTID" in url
@@ -80,16 +88,36 @@ def test_auth_url_saves_verifier_and_exchange_uses_it():
         assert store["client_config"]["installed"]["redirect_uris"] == [
             "http://localhost:8080/"]
         assert store["scopes"] == ["https://www.googleapis.com/auth/drive.file"]
-        # PKCE verifier persisted (mode 600) by the --auth-url step
-        assert verifier.read_text() == "auto-verifier-xyz"
-        assert stat.S_IMODE(verifier.stat().st_mode) == 0o600
+        # verifier + challenge persisted (mode 600) by the --auth-url step,
+        # and the challenge is the S256 of the saved verifier
+        verifier = mod.VERIFIER_PATH.read_text()
+        challenge = mod.CHALLENGE_PATH.read_text()
+        assert challenge == mod.code_challenge(verifier)
+        assert stat.S_IMODE(mod.VERIFIER_PATH.stat().st_mode) == 0o600
+        assert stat.S_IMODE(mod.CHALLENGE_PATH.stat().st_mode) == 0o600
+        # the explicit verifier/challenge reach the flow (not the lib's own)
+        assert store["auth_url_kwargs"]["code_challenge"] == challenge
+        assert store["auth_url_kwargs"]["code_challenge_method"] == "S256"
+        assert store["flow_kwargs"]["code_verifier"] == verifier
         path = mod.exchange("CODE-123")
-        assert path == token
+        assert path == mod.TOKEN_PATH
         assert store["code"] == "CODE-123"
         # the --code step passes the SAME verifier back to the flow
-        assert store["flow_kwargs"]["code_verifier"] == "auto-verifier-xyz"
-        saved = json.loads(token.read_text())
+        assert store["flow_kwargs"]["code_verifier"] == verifier
+        saved = json.loads(mod.TOKEN_PATH.read_text())
         assert saved == {"client_id": "CLIENTID", "client_secret": "SECRET",
                          "refresh_token": "refresh-xyz",
                          "type": "authorized_user"}
-        assert stat.S_IMODE(token.stat().st_mode) == 0o600
+        assert stat.S_IMODE(mod.TOKEN_PATH.stat().st_mode) == 0o600
+
+def test_exchange_with_mismatched_verifier_refuses_without_fetch():
+    mod = _load("drive_authorize", "ops/drive_authorize.py")
+    store = {}
+    _stub_oauthlib(store)
+    with tempfile.TemporaryDirectory() as tmp:
+        _setup_tmp(mod, store, tmp)
+        mod.auth_url()
+        # tamper: verifier no longer matches the saved challenge
+        mod.VERIFIER_PATH.write_text(mod.new_verifier())
+        assert mod.main(["drive_authorize.py", "--code", "CODE-123"]) == 2
+        assert "code" not in store  # fetch_token never called: code unspent
