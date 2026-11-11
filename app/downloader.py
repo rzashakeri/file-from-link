@@ -6,6 +6,9 @@ Mitigations built in, tried in order:
      via the bgutil-ytdlp-pot-provider plugin.
   2. Optional cookies file (YTDLP_COOKIES_FILE) — used only if the file exists.
   3. Fallback player clients (tv, web_safari, ios) retried automatically.
+  4. curl-cffi impersonation ("chrome") on every yt-dlp call, so
+     Cloudflare-fronted sites see a browser TLS fingerprint, not Python
+     urllib; retries raised to 10 (+10 fragment retries) for flaky links.
 """
 from pathlib import Path
 import shutil
@@ -16,18 +19,29 @@ from .utils import format_selector, is_spotify, is_apple_music, classify_url, IM
 class DownloadError(Exception): pass
 BOT_WALL_MARKERS = ("not a bot", "sign in to confirm", "po token", "potoken", "needs to be reloaded", "requested format is not available")
 FALLBACK_CLIENTS = ["tv", "ios", "web_safari"]
-def _build_opts(choice, job_id, on_progress, player_client=None, url: str = ''):
+def _build_opts(choice, job_id, on_progress, player_client=None, url: str = '', force_best=False):
     out = str(DOWNLOAD_DIR / job_id / "%(title).80s.%(ext)s")
     def hook(d):
         if on_progress and d.get("status") == "downloading":
             total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
             on_progress(d.get("downloaded_bytes", 0), total)
+    if force_best:
+        # Most permissive format: the picked height/audio tier matched
+        # nothing downloadable — retry with the best the site offers.
+        fmt = "ba/bestaudio/best" if choice in ("audiohq", "audio", "audiolow") else "bv*+ba/best"
+    else:
+        fmt = format_selector(choice)
     opts = {
-        "format": format_selector(choice), "outtmpl": out, "noplaylist": True,
-        "progress_hooks": [hook], "socket_timeout": 30, "retries": 3,
+        "format": fmt, "outtmpl": out, "noplaylist": True,
+        "progress_hooks": [hook], "socket_timeout": 30, "retries": 10, "fragment_retries": 10,
         "merge_output_format": "mp4", "quiet": True, "no_warnings": True, "max_filesize": MAX_FILE_BYTES,
         "extractor_args": {"youtubepot-bgutilhttp": {"base_url": [POT_BASE_URL]}},
     }
+    try:
+        import curl_cffi  # noqa: F401 — present in requirements; if it is
+        opts["impersonate"] = "chrome"  # missing, yt-dlp falls back silently.
+    except ImportError:
+        pass  # no curl-cffi: plain urllib, as before (never break downloads).
     if PROXY:
         opts["proxy"] = PROXY
     if player_client:
@@ -75,10 +89,25 @@ def _fetch_subtitles(url, job_id, player_client=None):
     except Exception:
         pass
 
-def _extract_once(url, choice, job_id, on_progress, player_client=None):
-    opts = _build_opts(choice, job_id, on_progress, player_client, url)
+def _extract_once(url, choice, job_id, on_progress, player_client=None, force_best=False):
+    opts = _build_opts(choice, job_id, on_progress, player_client, url, force_best)
     with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
+        try:
+            info = ydl.extract_info(url, download=True)
+        except AttributeError as e:
+            # yt-dlp crashes with "'NoneType' object has no attribute
+            # 'setdefault'" when an extractor returns no info at all —
+            # all 216 live cases are t.me links. Turn the crash into a
+            # clear failure message instead of a cryptic one (the raw
+            # error is what the user sees on a failed job).
+            if "setdefault" in str(e):
+                if "t.me" in url:
+                    raise DownloadError("couldn't read any media from this Telegram post (t.me links usually fail — try its direct file link instead)") from e
+                raise DownloadError("no downloadable media found in this link") from e
+            raise
+        if info is None:
+            raise DownloadError("couldn't read any media from this Telegram post (t.me links usually fail — try its direct file link instead)"
+                                if "t.me" in url else "no downloadable media found in this link")
         path = Path(ydl.prepare_filename(info))
         if choice in ("audiohq", "audio", "audiolow"): path = path.with_suffix(".mp3")
         if not path.exists():
@@ -257,11 +286,24 @@ def download(url: str, choice: str, job_id: str, on_progress=None, lang: str = "
         raise
 
 def _download_ytdlp(url: str, choice: str, job_id: str, on_progress=None) -> tuple[Path, dict]:
+    """yt-dlp path with its player-client fallbacks. A 'no output file'
+    failure (yt-dlp finished but produced nothing — usually the picked
+    format matched nothing downloadable) gets ONE retry with the most
+    permissive format before the job fails."""
+    try:
+        return _download_ytdlp_once(url, choice, job_id, on_progress, force_best=False)
+    except DownloadError as e:
+        if "no output file" in str(e):
+            return _download_ytdlp_once(url, choice, job_id, on_progress, force_best=True)
+        raise
+
+
+def _download_ytdlp_once(url: str, choice: str, job_id: str, on_progress=None, force_best=False) -> tuple[Path, dict]:
     attempts = [None] + FALLBACK_CLIENTS if "youtu" in url else [None]
     last_error = None
     for client in attempts:
         try:
-            return _extract_once(url, choice, job_id, on_progress, client)
+            return _extract_once(url, choice, job_id, on_progress, client, force_best)
         except yt_dlp.utils.DownloadError as e:
             last_error = e
             msg = str(e).lower()

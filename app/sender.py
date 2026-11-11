@@ -3,19 +3,52 @@
 2000MB via a local Bot API server). Above it: S3 presigned link if
 configured, otherwise a public link served by app.api
 (/files/<token>/<name>, TTL-bound)."""
-import json, secrets, shutil, subprocess, time, urllib.parse
+import json, re, secrets, shutil, subprocess, time, urllib.parse
 from pathlib import Path
 import httpx
 from .config import BOT_TOKEN, TELEGRAM_LIMIT, PUBLIC_DIR, PUBLIC_BASE_URL, S3_BUCKET, AWS_REGION, FILE_TTL_HOURS, BOT_API_BASE_URL
 from .i18n import t as tr
 API = f"{BOT_API_BASE_URL or 'https://api.telegram.org/bot'}{BOT_TOKEN}"
 FILE_SEND_TIMEOUT = 1800  # a 1GB upload to Telegram DCs takes minutes
+def _retry_after_seconds(resp) -> int | None:
+    """Seconds Telegram asks us to wait after a 429, if it says so.
+    Prefers parameters.retry_after; falls back to the description text
+    ('Too Many Requests: retry after 5'). Capped at 60s."""
+    try:
+        p = (resp.json() or {}).get("parameters") or {}
+        if p.get("retry_after") is not None:
+            return max(0, min(60, int(p["retry_after"])))
+    except Exception:
+        pass
+    try:
+        m = re.search(r"retry after (\d+)", (resp.json() or {}).get("description") or "", re.I)
+        if m: return max(0, min(60, int(m.group(1))))
+    except Exception:
+        pass
+    return None
+
 def tg(method, **kw):
+    """One Bot API call. On a 429 (Telegram flood limit) waits out the
+    retry_after Telegram reports (default 5s) and retries ONCE — a burst
+    of status edits/sends must not fail the whole job. File uploads are
+    rewound before the retry so the second attempt sends the full file."""
     timeout = kw.pop("timeout", 600)
-    with httpx.Client(timeout=timeout) as c:
-        r = c.post(f"{API}/{method}", data={k:v for k,v in kw.items() if not isinstance(v, tuple)},
-                   files={k:v for k,v in kw.items() if isinstance(v, tuple)})
-        r.raise_for_status(); return r.json()
+    data = {k: v for k, v in kw.items() if not isinstance(v, tuple)}
+    files = {k: v for k, v in kw.items() if isinstance(v, tuple)}
+    for attempt in (1, 2):
+        try:
+            with httpx.Client(timeout=timeout) as c:
+                r = c.post(f"{API}/{method}", data=data, files=files)
+                r.raise_for_status(); return r.json()
+        except httpx.HTTPStatusError as e:
+            if e.response is not None and e.response.status_code == 429 and attempt == 1:
+                wait = _retry_after_seconds(e.response)
+                time.sleep(wait if wait is not None else 5)
+                for _, f in files.values():
+                    try: f.seek(0)
+                    except Exception: pass
+                continue
+            raise
 def send_text(chat_id, text, **kw): return tg("sendMessage", chat_id=chat_id, text=text, **kw)
 def copy_message(chat_id, from_chat_id, message_id):
     return tg("copyMessage", chat_id=chat_id, from_chat_id=from_chat_id, message_id=message_id)

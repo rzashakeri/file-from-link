@@ -14,10 +14,12 @@ BOT_API_BASE_URL = os.environ.get("BOT_API_BASE_URL", "").rstrip("/")
 # overrides either way. Empty BOT_API_BASE_URL = cloud default.
 TELEGRAM_LIMIT = int(os.environ.get("TELEGRAM_UPLOAD_LIMIT_MB", "2000" if BOT_API_BASE_URL else "49"))*1024*1024
 MAX_JOBS_PER_USER = int(os.environ.get("MAX_JOBS_PER_USER","3"))
-# 1200 -> 1800: with a local Bot API server the send step alone may take
+# 1200 -> 1800 -> 3600: with a local Bot API server the send step alone may take
 # minutes for a 1GB file (upload to Telegram DCs), so the job envelope
-# grows to match. Still env-overridable via JOB_TIMEOUT_SECONDS.
-JOB_TIMEOUT = int(os.environ.get("JOB_TIMEOUT_SECONDS","1800"))
+# grows to match. 2026-11-11: slow sources (per-IP ~10MB/s) need the extra
+# headroom — a bigger envelope saves slow-but-progressing jobs, it does not
+# make the download faster. Still env-overridable via JOB_TIMEOUT_SECONDS.
+JOB_TIMEOUT = int(os.environ.get("JOB_TIMEOUT_SECONDS","3600"))
 FILE_TTL_HOURS = int(os.environ.get("FILE_TTL_HOURS","24"))
 S3_BUCKET = os.environ.get("S3_BUCKET","")
 AWS_REGION = os.environ.get("AWS_REGION","eu-central-1")
