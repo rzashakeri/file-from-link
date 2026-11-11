@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
-"""Upload a backup archive to Google Drive (service account).
+"""Upload a backup archive to Google Drive.
 
 Runs on the EC2 host after ops/daily_backup.py builds the archive:
     /opt/ffl-drive/venv/bin/python3 ops/drive_upload.py <archive> <sha256>
 
-- Credentials: a Google service account key at /opt/ffl-secrets/drive-sa.json
-  (created in Google Cloud Console; NEVER in the repo or in a backup).
+Credentials — user OAuth FIRST (a service account cannot own files in a
+personal My Drive; Google returns 403 storageQuotaExceeded):
+- User token: /opt/ffl-secrets/drive-user-token.json (authorized-user file
+  with client_id, client_secret, refresh_token), created once by
+  ops/drive_authorize.py. Files are owned by the user, in the user's quota.
+- Fallback: a Google service account key at /opt/ffl-secrets/drive-sa.json
+  (only works with a Shared Drive / Workspace).
 - Destination folder: /opt/ffl-secrets/drive-folder-id.txt (one line).
 - Sets the Drive file description to the sha256 so the download side can
   verify integrity. Trashes folder files older than 7 days (keeps the
   newest), so Drive holds the same 7-day window as the server.
-- Exits 0 on success and prints FILE_ID=<id>; exits 2 when the key or the
-  folder config is missing. Google library imports are lazy, so the
+- Exits 0 on success and prints FILE_ID=<id>; exits 2 when no credentials
+  or the folder config is missing. Google library imports are lazy, so the
   module imports (and its config checks run) without the libs installed.
 
 Requires google-api-python-client + google-auth in a venv:
@@ -24,7 +29,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 KEY_PATH = Path(os.environ.get("FFL_DRIVE_SA_KEY", "/opt/ffl-secrets/drive-sa.json"))
+USER_TOKEN_PATH = Path(os.environ.get("FFL_DRIVE_USER_TOKEN", "/opt/ffl-secrets/drive-user-token.json"))
 FOLDER_ID_PATH = Path(os.environ.get("FFL_DRIVE_FOLDER_ID_FILE", "/opt/ffl-secrets/drive-folder-id.txt"))
+SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 RETENTION_DAYS = int(os.environ.get("FFL_RETENTION_DAYS", "7"))
 
 
@@ -50,12 +57,24 @@ def select_prune(files: list, days: int, now: datetime | None = None) -> list:
             if parse_time(f["modifiedTime"]) < cutoff]
 
 
-def build_service(key_path: Path):
-    from google.oauth2 import service_account
+def load_credentials():
+    """User OAuth token first, service-account key as fallback.
+    Raises FileNotFoundError when neither exists."""
+    if USER_TOKEN_PATH.exists():
+        from google.oauth2.credentials import Credentials
+        return Credentials.from_authorized_user_file(
+            str(USER_TOKEN_PATH), SCOPES)
+    if KEY_PATH.exists():
+        from google.oauth2 import service_account
+        return service_account.Credentials.from_service_account_file(
+            str(KEY_PATH), scopes=SCOPES)
+    raise FileNotFoundError(
+        f"no drive credentials: {USER_TOKEN_PATH} or {KEY_PATH}")
+
+
+def build_service():
     from googleapiclient.discovery import build
-    creds = service_account.Credentials.from_service_account_file(
-        str(key_path), scopes=["https://www.googleapis.com/auth/drive.file"])
-    return build("drive", "v3", credentials=creds)
+    return build("drive", "v3", credentials=load_credentials())
 
 
 def upload_archive(service, folder_id: str, archive: Path, sha256: str) -> str:
@@ -85,8 +104,8 @@ def main(argv) -> int:
         print("usage: drive_upload.py <archive> <sha256>", file=sys.stderr)
         return 2
     archive, sha256 = Path(argv[1]), argv[2]
-    if not KEY_PATH.exists():
-        print(f"drive service account key not found: {KEY_PATH}",
+    if not USER_TOKEN_PATH.exists() and not KEY_PATH.exists():
+        print(f"drive credentials not found: {USER_TOKEN_PATH} or {KEY_PATH}",
               file=sys.stderr)
         return 2
     folder_id = read_folder_id()
@@ -97,7 +116,7 @@ def main(argv) -> int:
     if not archive.exists():
         print(f"archive not found: {archive}", file=sys.stderr)
         return 2
-    service = build_service(KEY_PATH)
+    service = build_service()
     file_id = upload_archive(service, folder_id, archive, sha256)
     print(f"FILE_ID={file_id}")
     pruned = prune_folder(service, folder_id, RETENTION_DAYS)
