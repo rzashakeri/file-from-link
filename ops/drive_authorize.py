@@ -13,6 +13,13 @@ the second needs an authorization code from the user:
   in the file-from-link-backup Cloud project; redirect http://localhost:8080).
 - Token file: /opt/ffl-secrets/drive-user-token.json (mode 600), the
   authorized-user file ops/drive_upload.py reads (refresh token inside).
+- PKCE verifier: /opt/ffl-secrets/drive-pkce-verifier.txt (mode 600).
+  google-auth-oauthlib auto-generates a PKCE code verifier when building
+  the authorization URL and keeps it only in that process's memory, but
+  --auth-url and --code run as separate processes — so --auth-url saves
+  the verifier to this file and --code reads it back and passes it to
+  fetch_token. Without it Google rejects the exchange with
+  "Missing code verifier" and the one-time code is spent.
 - The user opens the URL, signs in as rzashakeri@gmail.com, authorizes the
   drive.file scope, and copies the code from the redirect URL — the
   localhost page itself will not load, the code is in the address bar.
@@ -32,6 +39,8 @@ CLIENT_PATH = Path(os.environ.get(
     "FFL_DRIVE_OAUTH_CLIENT", "/opt/ffl-secrets/drive-oauth-client.json"))
 TOKEN_PATH = Path(os.environ.get(
     "FFL_DRIVE_USER_TOKEN", "/opt/ffl-secrets/drive-user-token.json"))
+VERIFIER_PATH = Path(os.environ.get(
+    "FFL_DRIVE_PKCE_VERIFIER", "/opt/ffl-secrets/drive-pkce-verifier.txt"))
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 REDIRECT_URI = "http://localhost:8080/"
 
@@ -43,7 +52,7 @@ def load_client_config():
     return cfg
 
 
-def make_flow(cfg):
+def make_flow(cfg, code_verifier=None):
     from google_auth_oauthlib.flow import InstalledAppFlow
     client_config = {"installed": {
         "client_id": cfg["client_id"],
@@ -51,20 +60,37 @@ def make_flow(cfg):
         "auth_uri": cfg.get("auth_uri", "https://accounts.google.com/o/oauth2/auth"),
         "token_uri": cfg.get("token_uri", "https://oauth2.googleapis.com/token"),
         "redirect_uris": [REDIRECT_URI]}}
-    flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
+    flow = InstalledAppFlow.from_client_config(
+        client_config, SCOPES, code_verifier=code_verifier)
     flow.redirect_uri = REDIRECT_URI
     return flow
+
+
+def save_verifier(verifier: str) -> None:
+    VERIFIER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    VERIFIER_PATH.write_text(verifier)
+    os.chmod(VERIFIER_PATH, 0o600)
+
+
+def load_verifier() -> str:
+    if not VERIFIER_PATH.exists():
+        raise FileNotFoundError(
+            f"no saved PKCE verifier: {VERIFIER_PATH} — run --auth-url first")
+    return VERIFIER_PATH.read_text().strip()
 
 
 def auth_url() -> str:
     flow = make_flow(load_client_config())
     url, _ = flow.authorization_url(prompt="consent", access_type="offline")
+    if not flow.code_verifier:
+        raise RuntimeError("no PKCE verifier generated for authorization URL")
+    save_verifier(flow.code_verifier)
     return url
 
 
 def exchange(code: str) -> Path:
     cfg = load_client_config()
-    flow = make_flow(cfg)
+    flow = make_flow(cfg, code_verifier=load_verifier())
     flow.fetch_token(code=code)
     creds = flow.credentials
     token = {"client_id": cfg["client_id"],
