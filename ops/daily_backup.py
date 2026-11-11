@@ -43,7 +43,7 @@ BACKUP_DIR = Path(os.environ.get(
 RETENTION_DAYS = int(os.environ.get("FFL_RETENTION_DAYS", "7"))
 
 EXCLUDE_DIRS = {".git", "__pycache__", ".venv", "downloads", "public",
-                "bot-api-data", ".mypy_cache"}
+                "bot-api-data", ".mypy_cache", ".secrets"}
 EXCLUDE_FILES = {".env"}
 
 

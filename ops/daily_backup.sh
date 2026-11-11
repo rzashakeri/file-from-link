@@ -8,6 +8,7 @@ cd "$REPO_DIR" || exit 1
 OUT=$(/usr/bin/python3 ops/daily_backup.py) || { echo "$OUT"; echo "backup build FAILED"; exit 1; }
 echo "$OUT"
 ARCHIVE=$(echo "$OUT" | sed -n 's/^ARCHIVE=//p')
+SHA=$(echo "$OUT" | sed -n 's/^SHA256=//p')
 CAPTION=$(echo "$OUT" | sed -n 's/^CAPTION=//p')
 [ -n "$ARCHIVE" ] || { echo "no ARCHIVE in builder output"; exit 1; }
 # The shared volume is /data inside containers. Refresh the sender script
@@ -16,3 +17,6 @@ CAPTION=$(echo "$OUT" | sed -n 's/^CAPTION=//p')
 CID=$(/usr/bin/docker compose ps -q bot 2>/dev/null)
 [ -n "$CID" ] && /usr/bin/docker cp app/send_backup.py "$CID:/code/app/send_backup.py" 2>/dev/null || true
 /usr/bin/docker compose exec -T bot python -m app.send_backup "/data/backups/$(basename "$ARCHIVE")" "$CAPTION"
+# Private copy: upload the same archive to Google Drive (service account).
+# Best-effort only — a failed upload must not fail the backup or the send.
+/opt/ffl-drive/venv/bin/python3 ops/drive_upload.py "$ARCHIVE" "$SHA" 2>&1 || echo "drive upload FAILED (Telegram copy already sent)"
